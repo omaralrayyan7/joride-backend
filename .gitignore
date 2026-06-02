@@ -1,0 +1,13 @@
+## .NET / ASP.NET Core
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.log
+
+## Secrets — NEVER commit these
+*firebase-adminsdk*.json
+appsettings.Development.json
+
+## Keep appsettings.json but credentials path will be a placeholder

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\omara\\\\Downloads\\\\joride-full-launch-ready-final \\(3\\)\\\\joride-full-launch-ready-final \\(3\\)\\\\joride-full-launch-ready-final\\\\joride-backend-merged\" -Recurse -Filter \"*.cs\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(grep -i \"\\\\.cs$\")",
+      "Bash(dotnet build *)",
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\omara\\\\Downloads\\\\joride-full-launch-ready-final \\(4\\)\\\\joride-full-launch-ready-final\\\\JoFront\" -Name)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 9000 -ErrorAction SilentlyContinue)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:9000/api/vehicles\" -UseBasicParsing -TimeoutSec 5; $r.StatusCode; $r.Content } catch { $_.Exception.Message })",
+      "PowerShell(cd \"C:\\\\Users\\\\omara\\\\Downloads\\\\joride-full-launch-ready-final \\(4\\)\\\\joride-full-launch-ready-final\\\\JoFront\"; $out = flutter analyze lib 2>&1 | Out-String; $lines = $out -split \"`n\"; \"=== severity counts ===\"; \"error: \" + \\($lines | Where-Object { $_ -match '\\\\berror\\\\b' -and $_ -match '\\\\.dart' }\\).Count; \"warning: \" + \\($lines | Where-Object { $_ -match '\\\\bwarning\\\\b' -and $_ -match '\\\\.dart' }\\).Count; \"info: \" + \\($lines | Where-Object { $_ -match '\\\\binfo\\\\b' -and $_ -match '\\\\.dart' }\\).Count; \"=== first 20 dart issues ===\"; $lines | Where-Object { $_ -match '\\\\.dart' } | Select-Object -First 20)",
+      "PowerShell($dir = \"C:\\\\Users\\\\omara\\\\Downloads\\\\joride-full-launch-ready-final \\(4\\)\\\\joride-full-launch-ready-final\\\\JoFront\\\\assets\"; if \\(-not \\(Test-Path $dir\\)\\) { New-Item -ItemType Directory -Path $dir | Out-Null }; Write-Host \"assets folder ready\")",
+      "Read(//mnt/c/Users/omara/Downloads/joride-full-launch-ready-final \\(4\\)/joride-full-launch-ready-final/**)",
+      "Bash(flutter analyze *)",
+      "Bash(gh auth *)",
+      "Bash(git config *)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git add *)"
+    ]
+  }
+}
