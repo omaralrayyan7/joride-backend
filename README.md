@@ -1,84 +1,79 @@
-# What is JoRide Backend Project
+# JoRide Backend
 
-## Overview
+[![ASP.NET Core](https://img.shields.io/badge/ASP.NET_Core-8.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
+[![Firebase](https://img.shields.io/badge/Firebase-Firestore-FFCA28?logo=firebase)](https://firebase.google.com/)
+[![JWT](https://img.shields.io/badge/Auth-JWT_Bearer-000000?logo=jsonwebtokens)](https://jwt.io/)
+[![Swagger](https://img.shields.io/badge/Docs-Swagger_UI-85EA2D?logo=swagger)](https://swagger.io/)
 
-**JoRide Backend** is an **ASP.NET Core 8 REST API** that powers a car-rental / ride-sharing platform for Jordan. It handles user accounts, JWT authentication, vehicle fleet management, trip lifecycle (book → drive → return), in-app wallet payments, OTP verification, digital car keys, push notifications, and an admin dashboard. Data is persisted in **Firebase Firestore** and vehicle GPS tracking is delegated to a **Traccar** server.
+REST API powering the **JoRide** car-rental / ride-sharing platform for Jordan. Handles user accounts, JWT authentication, vehicle fleet management, trip lifecycle (book → drive → return), in-app wallet payments, OTP verification, digital car keys, push notifications, real-time GPS tracking via Traccar, and an admin dashboard.
 
-**Tech stack:** C# · ASP.NET Core 8 · Firebase Admin SDK (Firestore) · JWT Bearer auth · Swagger/OpenAPI · Traccar GPS API · SMS/Email services
+> **Related:** [joride-frontend](https://github.com/omaralrayyan7/joride-frontend) — Flutter mobile app
 
----
+## Screenshots
 
-## Key Code Segments
+| Swagger UI | Endpoint Overview |
+|---|---|
+| ![Swagger](docs/swagger.png) | See full API docs by running the project and visiting `/swagger` |
 
-### Dependency Injection & JWT Setup (`Program.cs`)
-Registers all services and configures JWT Bearer authentication.
+> Run locally and navigate to `https://localhost:{PORT}/swagger` to explore all endpoints interactively.
 
-```csharp
-builder.Services.AddSingleton<FirestoreService>();
-builder.Services.AddHostedService<FirestoreDataLoader>();
-builder.Services.AddSingleton<JwtTokenService>();
-builder.Services.AddSingleton<TraccarService>();
-builder.Services.AddScoped<IOtpService, OtpService>();
+## Tech Stack
 
-builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options => {
-        options.MapInboundClaims = false;
-        options.TokenValidationParameters = new TokenValidationParameters {
-            ValidateIssuer = true, ValidateAudience = true,
-            ValidateLifetime = true, ValidateIssuerSigningKey = true,
-            ValidIssuer = jwt.Issuer, ValidAudience = jwt.Audience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Key))
-        };
-    });
+| Layer | Technology |
+|---|---|
+| Framework | ASP.NET Core 8 |
+| Language | C# |
+| Database | Firebase Firestore (Admin SDK) |
+| Auth | JWT Bearer |
+| GPS Tracking | Traccar REST API |
+| Notifications | Push + SMS/Email services |
+| Docs | Swagger / OpenAPI |
+
+## Key Features
+
+- **JWT Auth** — register, login, OTP verification, token refresh
+- **Vehicle Fleet** — CRUD, availability tracking, GPS position from Traccar
+- **Trip Lifecycle** — book → start → active (live fare meter) → return
+- **Digital Keys** — time-limited unlock tokens issued on trip start
+- **Wallet Payments** — balance management, charge, top-up, transaction history
+- **Admin Dashboard** — user management, fleet oversight, trip monitoring
+- **Real-time GPS** — vehicle location polled from Traccar server
+
+## Project Structure
+
+```
+JoRideBackend/
+├── Controllers/          # REST endpoints (Auth, Users, Vehicles, Trips, Wallet, Admin …)
+├── Models/               # Domain entities (User, Vehicle, Trip, Wallet …)
+├── Services/             # FirestoreService, JwtTokenService, TraccarService, OtpService …
+├── DTOs/                 # Request / response objects
+├── Program.cs            # DI container + JWT middleware config
+└── appsettings.json      # Configuration (JWT, Firebase, Traccar)
 ```
 
-### Start Trip (`TripsController.cs`)
-Validates the user, checks wallet balance, charges the fare, then creates the trip and issues a digital key.
+## Getting Started
 
-```csharp
-[HttpPost("start")]
-public async Task<ActionResult<Trip>> Start(StartTripRequest request)
-{
-    // Block booking if wallet is negative
-    var user = UsersController.GetUser(request.UserId);
-    if (user?.WalletBalance < 0)
-        return BadRequest("Outstanding balance — please top up your wallet first.");
+### Prerequisites
+- .NET 8 SDK
+- Firebase project with Firestore enabled
+- `firebase-adminsdk.json` service account key
 
-    if (!VehiclesController.IsAvailable(request.VehicleId))
-        return BadRequest("Vehicle is not available.");
+### Setup
 
-    // Charge wallet
-    var paid = await WalletController.TryChargeAsync(
-        request.UserId, request.TotalFare,
-        $"Trip payment for vehicle #{request.VehicleId}",
-        request.PaymentMethod);
+```bash
+git clone https://github.com/omaralrayyan7/joride-backend.git
+cd joride-backend
 
-    if (!paid) return BadRequest("Payment failed or insufficient wallet balance.");
+# Place your Firebase service account key
+cp /path/to/firebase-adminsdk.json JoRideBackend/
 
-    var trip = new Trip { UserId = request.UserId, VehicleId = request.VehicleId,
-                          Status = "InProgress", DigitalKeyEnabled = true, ... };
-    trips.Add(trip);
-    await _firestore.SaveTripAsync(trip);
-    return CreatedAtAction(nameof(Get), new { id = trip.Id }, trip);
-}
+# Update appsettings.json with your JWT secret, Firebase project ID, Traccar URL
+dotnet restore
+dotnet run
 ```
 
-### User Registration (`UsersController.cs`)
-Hashes the password, verifies driving license, and returns a JWT on success.
+API is available at `https://localhost:{PORT}` — Swagger UI at `/swagger`.
 
-```csharp
-[HttpPost("register")]
-public async Task<ActionResult<object>> Register(RegisterRequest req)
-{
-    if (users.Any(u => u.Email == req.Email)) return Conflict("Email already registered.");
-    var user = new User { Name = req.Name, Email = req.Email, Phone = req.Phone };
-    user.PasswordHash = hasher.HashPassword(user, req.Password);
-    var verified = await licenseVerifier.VerifyAsync(req.DrivingLicenseNumber);
-    user.IsLicenseVerified = verified;
-    users.Add(user);
-    await _firestore.SaveUserAsync(user);
-    var token = tokens.Generate(user);
-    return CreatedAtAction(nameof(Get), new { id = user.Id }, BuildProfileResponse(user, token));
-}
-```
+## License
+
+[MIT](LICENSE)
