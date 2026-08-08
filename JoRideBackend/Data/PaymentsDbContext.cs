@@ -1,3 +1,4 @@
+using JoRideBackend.Models.Auth;
 using JoRideBackend.Models.Payments;
 using JoRideBackend.Models.Telemetry;
 using Microsoft.EntityFrameworkCore;
@@ -5,10 +6,11 @@ using Microsoft.EntityFrameworkCore;
 namespace JoRideBackend.Data
 {
     /// <summary>
-    /// Relational store for money, device-command state, and telemetry history.
-    /// Separate from Firestore, which remains the store of record for users/vehicles/trips
-    /// (including each vehicle's *live* lat/lng — telemetry history lives here, the current
-    /// position is mirrored onto the Vehicle document by TraccarPollingService).
+    /// Relational store for money, device-command state, telemetry history, and auth/KYC
+    /// security state. Separate from Firestore, which remains the store of record for
+    /// users/vehicles/trips (including each vehicle's *live* lat/lng — telemetry history
+    /// lives here, the current position is mirrored onto the Vehicle document by
+    /// TraccarPollingService).
     /// </summary>
     public class PaymentsDbContext : DbContext
     {
@@ -24,6 +26,8 @@ namespace JoRideBackend.Data
         public DbSet<ProcessedPaymentEvent> ProcessedPaymentEvents => Set<ProcessedPaymentEvent>();
         public DbSet<PendingTopUp> PendingTopUps => Set<PendingTopUp>();
         public DbSet<PaymentAdminAudit> PaymentAdminAudits => Set<PaymentAdminAudit>();
+        public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+        public DbSet<KycDocument> KycDocuments => Set<KycDocument>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -114,6 +118,30 @@ namespace JoRideBackend.Data
                 entity.Property(e => e.Details).HasMaxLength(1000).IsRequired();
                 entity.HasIndex(e => e.PaymentIntentId);
                 entity.HasIndex(e => e.PendingTopUpId);
+            });
+
+            modelBuilder.Entity<RefreshToken>(entity =>
+            {
+                entity.ToTable("refresh_tokens");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.TokenHash).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.ReplacedByTokenHash).HasMaxLength(255);
+                entity.Property(e => e.CreatedByIp).HasMaxLength(64);
+                entity.HasIndex(e => e.TokenHash).IsUnique();
+                entity.HasIndex(e => e.FamilyId);
+                entity.HasIndex(e => e.UserId);
+                entity.Ignore(e => e.IsActive); // computed, not a column
+            });
+
+            modelBuilder.Entity<KycDocument>(entity =>
+            {
+                entity.ToTable("kyc_documents");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.DocumentType).HasConversion<string>().HasMaxLength(32);
+                entity.Property(e => e.FileName).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.ContentType).HasMaxLength(100).IsRequired();
+                entity.Property(e => e.StoragePath).HasMaxLength(500).IsRequired();
+                entity.HasIndex(e => e.UserId);
             });
         }
     }

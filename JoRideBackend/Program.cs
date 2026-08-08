@@ -1,10 +1,12 @@
 using Microsoft.OpenApi.Models;
 using System.Text;
+using System.Threading.RateLimiting;
 using JoRideBackend.Data;
 using JoRideBackend.Models;
 using JoRideBackend.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
@@ -135,6 +137,11 @@ builder.Services.AddScoped<JoRideBackend.Services.Payments.LedgerService>();
 builder.Services.AddScoped<JoRideBackend.Services.Payments.HyperPayWebhookService>();
 builder.Services.AddScoped<JoRideBackend.Services.Payments.PaymentAdminService>();
 
+// E2.1: refresh token rotation. E2.2: KYC document storage/signing.
+builder.Services.AddScoped<JoRideBackend.Services.Auth.RefreshTokenService>();
+builder.Services.AddSingleton<JoRideBackend.Services.Auth.KycDocumentStorage>();
+builder.Services.AddSingleton<JoRideBackend.Services.Auth.KycSigningService>();
+
 builder.Services.AddHealthChecks()
     .AddCheck<PostgresHealthCheck>("postgres")
     .AddCheck<TraccarHealthCheck>("traccar");
@@ -166,9 +173,40 @@ builder.Services
         };
     });
 
+builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, JoRideBackend.Services.Auth.KycApprovedHandler>();
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("AdminOnly", policy => policy.RequireClaim("role", "admin"));
+    options.AddPolicy("KycApproved", policy => policy.Requirements.Add(new JoRideBackend.Services.Auth.KycApprovedRequirement()));
+});
+
+// Rate limiting for /api/auth/* — partitioned per client IP so one abusive caller can't
+// exhaust another's quota. Login/refresh get room for a genuine mistyped password; OTP is
+// stricter since each request costs a real SMS/email send.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    static string PartitionKey(HttpContext http) =>
+        http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    options.AddPolicy("auth-login", http => RateLimitPartition.GetFixedWindowLimiter(
+        PartitionKey(http),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+
+    options.AddPolicy("auth-otp", http => RateLimitPartition.GetFixedWindowLimiter(
+        PartitionKey(http),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 3,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
 });
 
 var app = builder.Build();
@@ -196,6 +234,7 @@ else
 app.UseStaticFiles();
 app.UseRouting();
 app.UseCors();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

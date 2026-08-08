@@ -1,5 +1,12 @@
 namespace JoRideBackend.Models
 {
+    public enum KycStatus
+    {
+        Pending,
+        Approved,
+        Rejected,
+    }
+
     public class User
     {
         public int Id { get; set; }
@@ -33,5 +40,16 @@ namespace JoRideBackend.Models
         // ── Brute-force / lockout ──────────────────────────────────────────────
         public int FailedLoginAttempts { get; set; } = 0;
         public DateTime? LockoutEndUtc { get; set; }
+
+        /// <summary>
+        /// Defaults to Pending for every new registration — nothing sets it to Approved
+        /// except KycAdminController's approve endpoint (admin-only, reason required,
+        /// audited). Deliberately NOT one of the fields UsersController.Update copies from
+        /// its request body — that endpoint is reachable by any authenticated user for
+        /// their own profile, so a settable KycStatus there would make the "KycApproved"
+        /// booking gate trivially self-approvable. Existing Firestore documents that
+        /// predate this field read back as Pending (see FirestoreService.DocToUser).
+        /// </summary>
+        public KycStatus KycStatus { get; set; } = KycStatus.Pending;
     }
 }

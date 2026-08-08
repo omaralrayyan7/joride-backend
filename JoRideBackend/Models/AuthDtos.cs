@@ -13,7 +13,11 @@ namespace JoRideBackend.Models
 
     public record AuthUser(int Id, string? Name, string? Email, decimal WalletBalance, bool IsAdmin = false);
 
-    public record AuthResponse(string Token, DateTime ExpiresAt, AuthUser User);
+    public record AuthResponse(string Token, DateTime ExpiresAt, AuthUser User, string RefreshToken);
+
+    public record RefreshTokenRequest(string RefreshToken);
+
+    public record RefreshTokenResponse(string Token, DateTime ExpiresAt, string RefreshToken);
 
     public record StartTripRequest(
         int UserId,

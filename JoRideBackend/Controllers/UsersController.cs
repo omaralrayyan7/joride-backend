@@ -1,8 +1,10 @@
 using JoRideBackend.Models;
 using JoRideBackend.Services;
+using JoRideBackend.Services.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -62,18 +64,23 @@ public class UsersController : ControllerBase
     private readonly JwtTokenService tokens;
     private readonly ILicenseVerification licenseVerifier;
     private readonly IConfiguration config;
+    private readonly RefreshTokenService refreshTokens;
 
     public UsersController(
         IPasswordHasher<User> hasher,
         JwtTokenService tokens,
         ILicenseVerification licenseVerifier,
-        IConfiguration config)
+        IConfiguration config,
+        RefreshTokenService refreshTokens)
     {
         this.hasher = hasher;
         this.tokens = tokens;
         this.licenseVerifier = licenseVerifier;
         this.config = config;
+        this.refreshTokens = refreshTokens;
     }
+
+    private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     [Authorize(Policy = "AdminOnly")]
     [HttpGet]
@@ -215,6 +222,7 @@ public class UsersController : ControllerBase
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
     [AllowAnonymous]
+    [EnableRateLimiting("auth-login")]
     [HttpPost("/api/auth/register")]
     public async Task<ActionResult<AuthResponse>> Register(RegisterRequest request)
     {
@@ -270,10 +278,13 @@ public class UsersController : ControllerBase
         await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
 
         var (token, expiresAt) = tokens.IssueToken(user);
-        return new AuthResponse(token, expiresAt, new AuthUser(user.Id, user.Name, user.Email, user.WalletBalance, user.IsAdmin));
+        var refreshToken = await refreshTokens.IssueAsync(user.Id, ClientIp());
+        return new AuthResponse(
+            token, expiresAt, new AuthUser(user.Id, user.Name, user.Email, user.WalletBalance, user.IsAdmin), refreshToken);
     }
 
     [AllowAnonymous]
+    [EnableRateLimiting("auth-login")]
     [HttpPost("/api/auth/login")]
     public async Task<ActionResult<AuthResponse>> Login(LoginRequest request)
     {
@@ -301,6 +312,9 @@ public class UsersController : ControllerBase
                 user.LockoutEndUtc = DateTime.UtcNow.Add(LockoutDuration);
                 user.FailedLoginAttempts = 0;
                 await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
+                AuditController.Log("AccountLockedOut", "User", user.Id, $"User #{user.Id} ({user.Email})", "System",
+                    $"Locked for {LockoutDuration.TotalMinutes} minutes after {MaxFailedAttempts} failed login attempts. " +
+                    $"Request IP: {HttpContext.Connection.RemoteIpAddress}.");
                 return StatusCode(423, $"Account locked due to too many failed attempts. Try again in {LockoutDuration.TotalMinutes} minutes.");
             }
             await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
@@ -317,7 +331,47 @@ public class UsersController : ControllerBase
         }
 
         var (token, expiresAt) = tokens.IssueToken(user);
-        return new AuthResponse(token, expiresAt, new AuthUser(user.Id, user.Name, user.Email, user.WalletBalance, user.IsAdmin));
+        var refreshToken = await refreshTokens.IssueAsync(user.Id, ClientIp());
+        return new AuthResponse(
+            token, expiresAt, new AuthUser(user.Id, user.Name, user.Email, user.WalletBalance, user.IsAdmin), refreshToken);
+    }
+
+    /// <summary>
+    /// Rotation, not just refresh: the presented token is always revoked here and replaced
+    /// with a new one — there's no path back to Ok() without RefreshTokenService having
+    /// revoked what was just used. See RefreshTokenService for reuse-detection.
+    /// </summary>
+    [AllowAnonymous]
+    [EnableRateLimiting("auth-login")]
+    [HttpPost("/api/auth/refresh")]
+    public async Task<ActionResult<RefreshTokenResponse>> Refresh(RefreshTokenRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+            return BadRequest("Refresh token is required.");
+
+        var result = await refreshTokens.RotateAsync(request.RefreshToken, ClientIp());
+
+        switch (result.Outcome)
+        {
+            case RefreshOutcome.ReusedRevoked:
+                AuditController.Log("RefreshTokenReuseDetected", "User", result.UserId ?? 0,
+                    $"User #{result.UserId}", "System",
+                    $"A revoked refresh token was presented again — entire token family revoked. Request IP: {ClientIp()}.");
+                return Unauthorized("This refresh token has already been used. Please log in again.");
+
+            case RefreshOutcome.Expired:
+                return Unauthorized("Refresh token expired. Please log in again.");
+
+            case RefreshOutcome.InvalidOrUnknown:
+                return Unauthorized("Invalid refresh token.");
+        }
+
+        var user = users.FirstOrDefault(u => u.Id == result.UserId);
+        if (user is null || !user.IsActive)
+            return Unauthorized("Account not found or deactivated.");
+
+        var (token, expiresAt) = tokens.IssueToken(user);
+        return new RefreshTokenResponse(token, expiresAt, result.RawToken!);
     }
 
     private static object BuildProfileResponse(User u) => new
@@ -336,5 +390,6 @@ public class UsersController : ControllerBase
         u.CreatedAt,
         u.WalletBalance,
         u.ProfileImageUrl,
+        kycStatus = u.KycStatus.ToString(),
     };
 }

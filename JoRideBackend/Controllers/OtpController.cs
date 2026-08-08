@@ -1,5 +1,6 @@
 ﻿using JoRideBackend.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 [ApiController]
 [Route("api/otp")]
@@ -22,6 +23,7 @@ public class OtpController : ControllerBase
     public record VerifyEmailOtpRequest(string Email, string Code);
 
     // POST /api/otp/send
+    [EnableRateLimiting("auth-otp")]
     [HttpPost("send")]
     public async Task<IActionResult> SendSms([FromBody] SendSmsOtpRequest request)
     {
@@ -43,6 +45,7 @@ public class OtpController : ControllerBase
     }
 
     // POST /api/otp/send-email
+    [EnableRateLimiting("auth-otp")]
     [HttpPost("send-email")]
     public async Task<IActionResult> SendEmail([FromBody] SendEmailOtpRequest request)
     {
@@ -66,7 +69,8 @@ public class OtpController : ControllerBase
         }
     }
 
-    // POST /api/otp/verify
+    // POST /api/otp/verify — rate limited too: it's a brute-forceable short numeric code.
+    [EnableRateLimiting("auth-otp")]
     [HttpPost("verify")]
     public IActionResult VerifySms([FromBody] VerifySmsOtpRequest request)
     {
@@ -88,6 +92,7 @@ public class OtpController : ControllerBase
     }
 
     // POST /api/otp/verify-email
+    [EnableRateLimiting("auth-otp")]
     [HttpPost("verify-email")]
     public IActionResult VerifyEmail([FromBody] VerifyEmailOtpRequest request)
     {

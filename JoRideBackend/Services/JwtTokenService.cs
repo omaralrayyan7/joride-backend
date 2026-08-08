@@ -36,7 +36,12 @@ namespace JoRideBackend.Services
                 new(JwtRegisteredClaimNames.Email, user.Email ?? ""),
                 new(JwtRegisteredClaimNames.Name, user.Name ?? ""),
                 new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                new("role", user.IsAdmin ? "admin" : "user")
+                new("role", user.IsAdmin ? "admin" : "user"),
+                // Snapshot at issuance, not a live lookup — the "KycApproved" policy reads
+                // this claim rather than hitting Firestore on every authorized request. A
+                // change in KYC status is visible on the token's next issuance (login or
+                // refresh), bounded by Jwt:ExpireMinutes.
+                new("kycStatus", user.KycStatus.ToString()),
             };
 
             var jwt = new JwtSecurityToken(

@@ -77,6 +77,7 @@ namespace JoRideBackend.Services
                     ["walletBalance"]        = (double)u.WalletBalance,
                     ["profileImageUrl"]      = u.ProfileImageUrl,
                     ["failedLoginAttempts"]  = (long)u.FailedLoginAttempts,
+                    ["kycStatus"]            = u.KycStatus.ToString(),
                 };
                 if (u.LockoutEndUtc.HasValue)
                     dict["lockoutEndUtc"] = Timestamp.FromDateTime(u.LockoutEndUtc.Value.ToUniversalTime());
@@ -333,6 +334,12 @@ namespace JoRideBackend.Services
             ProfileImageUrl      = Str(d, "profileImageUrl"),
             FailedLoginAttempts  = d.ContainsField("failedLoginAttempts") ? (int)d.GetValue<long>("failedLoginAttempts") : 0,
             LockoutEndUtc        = d.ContainsField("lockoutEndUtc") ? d.GetValue<Timestamp>("lockoutEndUtc").ToDateTime() : null,
+            // Documents written before this field existed have no "kycStatus" — they read
+            // back as Pending, same as a brand-new user, rather than failing to parse.
+            KycStatus            = d.ContainsField("kycStatus") &&
+                                    Enum.TryParse<KycStatus>(d.GetValue<string>("kycStatus"), out var kyc)
+                                        ? kyc
+                                        : KycStatus.Pending,
         };
 
         private static Trip DocToTrip(DocumentSnapshot d) => new()

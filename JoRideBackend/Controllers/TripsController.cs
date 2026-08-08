@@ -1,5 +1,6 @@
 using JoRideBackend.Models;
 using JoRideBackend.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 [ApiController]
@@ -55,6 +56,13 @@ public class TripsController : ControllerBase
         return trip is null ? NotFound() : trip;
     }
 
+    // Booking gate (E2.2): only KYC-Approved, authenticated users may start a trip. This
+    // checks the CALLER's own "kycStatus" claim (see JwtTokenService/KycApprovedRequirement)
+    // — the normal app flow has callers booking for themselves, so this and the existing
+    // debt-gate check below cover the real cases. It does not separately verify
+    // request.UserId against the caller's identity; that binding gap predates this change
+    // and is out of scope here.
+    [Authorize(Policy = "KycApproved")]
     [HttpPost("start")]
     public async Task<ActionResult<Trip>> Start(StartTripRequest request)
     {
