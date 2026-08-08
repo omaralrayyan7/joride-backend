@@ -1,0 +1,204 @@
+@{
+    ViewData["Title"] = "Admin Dashboard";
+}
+
+<h1 class="mb-4">JoRide Admin Dashboard</h1>
+
+<div id="login-panel" class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">Admin Login</h5>
+        <p class="text-muted small">
+            This page holds no session of its own — every action below calls the real JSON API
+            using a JWT obtained here via <code>POST /api/auth/login</code>, kept only in this
+            browser tab's <code>sessionStorage</code>. Non-admin accounts will authenticate but
+            every admin-only call below will then correctly come back 403.
+        </p>
+        <form id="login-form" class="row g-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label">Email</label>
+                <input type="email" id="login-email" class="form-control" required autocomplete="username" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label">Password</label>
+                <input type="password" id="login-password" class="form-control" required autocomplete="current-password" />
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-primary">Log in</button>
+            </div>
+            <div class="col-auto">
+                <span id="login-status" class="text-muted"></span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="dashboard-sections" style="display:none;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <span>Logged in as <strong id="current-admin-name"></strong></span>
+        <button id="logout-btn" class="btn btn-outline-secondary btn-sm">Log out</button>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#kyc-pane" type="button">KYC Review</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#device-pane" type="button">Device Health</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#command-pane" type="button">Command Console</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#payments-pane" type="button">Payments</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#overdue-pane" type="button">Overdue Trips</button>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- ── KYC Review ─────────────────────────────────────────────────── -->
+        <div class="tab-pane fade show active" id="kyc-pane">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5>Pending KYC Reviews</h5>
+                <button class="btn btn-sm btn-outline-primary" id="kyc-refresh-btn">Refresh</button>
+            </div>
+            <div id="kyc-status" class="text-muted small mb-2"></div>
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr><th>User</th><th>Email</th><th>ID Number</th><th>License</th><th style="width:340px">Reason + Action</th></tr>
+                </thead>
+                <tbody id="kyc-table-body"></tbody>
+            </table>
+        </div>
+
+        <!-- ── Device Health ──────────────────────────────────────────────── -->
+        <div class="tab-pane fade" id="device-pane">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5>Device Health</h5>
+                <button class="btn btn-sm btn-outline-primary" id="device-refresh-btn">Refresh</button>
+            </div>
+            <p class="text-muted small">
+                Sourced from persisted Traccar telemetry (TelemetrySnapshot), not a live poll —
+                see AdminDashboardController.GetDeviceHealth. A vehicle with no snapshot in the
+                last 5 minutes is flagged offline.
+            </p>
+            <div id="device-status" class="text-muted small mb-2"></div>
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr><th>Vehicle</th><th>Plate</th><th>Last Position</th><th>Minutes Since</th><th>Status</th></tr>
+                </thead>
+                <tbody id="device-table-body"></tbody>
+            </table>
+        </div>
+
+        <!-- ── Command Console ────────────────────────────────────────────── -->
+        <div class="tab-pane fade" id="command-pane">
+            <h5>Command Console</h5>
+            <p class="text-muted small">
+                Dispatches through the real, safety-gated <code>POST /api/vehicles/{id}/commands/{type}</code>
+                (DeviceCommandsController / DeviceCommandService, unmodified). A reason is
+                required here and is recorded as a separate audit note
+                (<code>POST /api/admin/dashboard/command-notes</code>) before the real command
+                fires — the reason itself never influences whether the command is allowed.
+            </p>
+            <form id="command-form" class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Vehicle</label>
+                    <select id="command-vehicle" class="form-select" required></select>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Command</label>
+                    <select id="command-type" class="form-select" required>
+                        <option value="unlock">Unlock</option>
+                        <option value="lock">Lock</option>
+                        <option value="immobilize">Immobilize</option>
+                        <option value="mobilize">Mobilize</option>
+                    </select>
+                </div>
+                <div class="col-4">
+                    <label class="form-label">Reason (required)</label>
+                    <input type="text" id="command-reason" class="form-control" required minlength="3" placeholder="e.g. renter reported vehicle unreturned" />
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-danger">Send Command</button>
+                </div>
+            </form>
+            <div id="command-result" class="mt-3"></div>
+        </div>
+
+        <!-- ── Payments ────────────────────────────────────────────────────── -->
+        <div class="tab-pane fade" id="payments-pane">
+            <h5>Partial Capture</h5>
+            <p class="text-muted small">Wired to <code>POST /api/admin/payment-intents/{id}/partial-capture</code>.</p>
+            <form id="partial-capture-form" class="row g-2 align-items-end mb-4">
+                <div class="col-auto">
+                    <label class="form-label">Payment Intent ID</label>
+                    <input type="text" id="capture-intent-id" class="form-control" style="width:320px" required placeholder="GUID" />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Amount</label>
+                    <input type="number" id="capture-amount" class="form-control" step="0.01" min="0.01" required />
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Capture</button>
+                </div>
+            </form>
+            <div id="capture-result" class="mb-4"></div>
+
+            <hr />
+
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5>Pending Top-Ups</h5>
+                <button class="btn btn-sm btn-outline-primary" id="topups-refresh-btn">Refresh</button>
+            </div>
+            <p class="text-muted small">Wired to <code>GET /api/admin/dashboard/topups/pending</code> (list) and <code>POST /api/admin/topups/{id}/confirm</code> / <code>/reject</code>.</p>
+            <div id="topups-status" class="text-muted small mb-2"></div>
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr><th>User</th><th>Amount</th><th>Method</th><th>Reference</th><th>Submitted</th><th style="width:320px">Action</th></tr>
+                </thead>
+                <tbody id="topups-table-body"></tbody>
+            </table>
+
+            <hr />
+
+            <h5>Payout Report</h5>
+            <p class="text-muted small">Wired to <code>GET /api/admin/payouts/report</code>.</p>
+            <form id="payout-form" class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label">Period start</label>
+                    <input type="date" id="payout-start" class="form-control" required />
+                </div>
+                <div class="col-auto">
+                    <label class="form-label">Period end</label>
+                    <input type="date" id="payout-end" class="form-control" required />
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-outline-primary">Download CSV</button>
+                </div>
+            </form>
+            <div id="payout-status" class="text-muted small mt-2"></div>
+        </div>
+
+        <!-- ── Overdue Trips ───────────────────────────────────────────────── -->
+        <div class="tab-pane fade" id="overdue-pane">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5>Overdue Trips</h5>
+                <button class="btn btn-sm btn-outline-primary" id="overdue-refresh-btn">Refresh</button>
+            </div>
+            <p class="text-muted small">Wired to <code>GET /api/trips/overdue</code>. Listing only — no action here can lock/immobilize a vehicle; use the Command Console for that.</p>
+            <div id="overdue-status" class="text-muted small mb-2"></div>
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr><th>Trip</th><th>User</th><th>Vehicle</th><th>Scheduled End</th><th>Minutes Overdue</th><th>Notified</th></tr>
+                </thead>
+                <tbody id="overdue-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/admin-dashboard.js" asp-append-version="true"></script>
+}
