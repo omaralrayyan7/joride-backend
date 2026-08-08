@@ -95,6 +95,7 @@ builder.Services.AddHttpClient("traccar-rest", client =>
 
 builder.Services.AddSingleton<JoRideBackend.Services.TraccarService>();
 builder.Services.AddHostedService<TraccarPollingService>();
+builder.Services.AddHostedService<JoRideBackend.Services.OverdueTripMonitorService>();
 builder.Services.AddSingleton<IOtpService, OtpService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddScoped<IEmailService, EmailService>();

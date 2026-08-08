@@ -5,6 +5,7 @@ using JoRideBackend.Models;
 using JoRideBackend.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace JoRideBackend.Tests.Trips;
 
@@ -20,6 +21,15 @@ namespace JoRideBackend.Tests.Trips;
 /// authenticate all 20 requests (each specifying a different pre-seeded UserId in the body)
 /// so the test doesn't need 20 separate register/login/KYC-approve round trips — admins are
 /// exempt from the "caller must book for themselves" ownership check (see TripsController.Start).
+///
+/// The factory's real, DI-registered FirestoreService is swapped for an unconnected one
+/// (empty config, matching the pattern used by the pure-unit trip tests). A booking created
+/// here would otherwise persist to the actual dev Firestore project via
+/// VehiclesController.SetStatus/TripsController.Start's Firestore writes — and since
+/// TripsController.Initialize resets _nextId to 1 for an empty seed list, that new trip's ID
+/// could collide with and overwrite a real trip document (this happened during earlier E3/E4
+/// live-verification runs and had to be cleaned up by hand). Nothing about the concurrency
+/// behavior under test depends on Firestore actually being connected.
 /// </summary>
 public class DoubleBookingRaceTests : IClassFixture<WebApplicationFactory<Program>>
 {
@@ -27,7 +37,16 @@ public class DoubleBookingRaceTests : IClassFixture<WebApplicationFactory<Progra
 
     public DoubleBookingRaceTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory;
+        _factory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<FirestoreService>();
+                services.AddSingleton(new FirestoreService(
+                    new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<FirestoreService>.Instance));
+            });
+        });
     }
 
     [Fact]

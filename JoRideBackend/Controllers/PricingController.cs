@@ -60,6 +60,14 @@ public class PricingController : ControllerBase
         };
     }
 
+    // E4.1: graduated (tax-bracket-style) billing. The previous version picked a SINGLE tier
+    // for the whole overtime duration (>=1440min -> all-days, >=60min -> all-hours, else
+    // all-minutes), which put a cliff right at each boundary: 59 minutes of overtime cost
+    // 59*MinuteRate while 60 minutes cost only 1*HourlyRate — i.e. running over for LESS time
+    // could cost MORE. Decomposing into whole-days + whole-hours + remaining-minutes, each
+    // billed at its own rate, is monotonic by construction (more time never costs less) and
+    // correctly blends a trip that crosses from the hourly into the daily tier instead of
+    // rounding the whole overage up to extra whole days.
     public static (int billedMinutes, decimal fare, string rateApplied) CalculateOvertimeFare(string? category, DateTime scheduledEndUtc, DateTime actualEndUtc)
     {
         var overtimeSeconds = (actualEndUtc - scheduledEndUtc).TotalSeconds;
@@ -68,19 +76,15 @@ public class PricingController : ControllerBase
         var overtimeMinutes = Math.Max(1, (int)Math.Ceiling(overtimeSeconds / 60d));
         var rates = GetRatesForCategory(category);
 
-        if (overtimeMinutes >= 1440)
-        {
-            var days = (int)Math.Ceiling(overtimeMinutes / 1440d);
-            return (overtimeMinutes, days * rates.DailyRate, "day");
-        }
+        var days = overtimeMinutes / 1440;
+        var remainderAfterDays = overtimeMinutes % 1440;
+        var hours = remainderAfterDays / 60;
+        var minutes = remainderAfterDays % 60;
 
-        if (overtimeMinutes >= 60)
-        {
-            var hours = (int)Math.Ceiling(overtimeMinutes / 60d);
-            return (overtimeMinutes, hours * rates.HourlyRate, "hour");
-        }
+        var fare = days * rates.DailyRate + hours * rates.HourlyRate + minutes * rates.MinuteRate;
 
-        return (overtimeMinutes, overtimeMinutes * rates.MinuteRate, "min");
+        var rateApplied = days > 0 ? "day" : hours > 0 ? "hour" : "min";
+        return (overtimeMinutes, fare, rateApplied);
     }
 
     [HttpGet]

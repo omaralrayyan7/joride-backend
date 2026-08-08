@@ -22,5 +22,12 @@ namespace JoRideBackend.Models
         public DateTime? PaidAt { get; set; }
         public bool DigitalKeyEnabled { get; set; }
         public string? Status { get; set; }
+
+        /// <summary>
+        /// E4.3: set once, the first time OverdueTripMonitorService detects this trip is still
+        /// InProgress more than the grace period past ScheduledEndTime. Null means either not
+        /// overdue or not yet checked. Used to send the overdue notification exactly once.
+        /// </summary>
+        public DateTime? OverdueFlaggedAt { get; set; }
     }
 }

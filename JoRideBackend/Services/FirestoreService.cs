@@ -136,6 +136,8 @@ namespace JoRideBackend.Services
                     dict["endTime"] = Timestamp.FromDateTime(t.EndTime.Value.ToUniversalTime());
                 if (t.PaidAt.HasValue)
                     dict["paidAt"] = Timestamp.FromDateTime(t.PaidAt.Value.ToUniversalTime());
+                if (t.OverdueFlaggedAt.HasValue)
+                    dict["overdueFlaggedAt"] = Timestamp.FromDateTime(t.OverdueFlaggedAt.Value.ToUniversalTime());
                 await _db!.Collection(ColTrips).Document(t.Id.ToString()).SetAsync(dict);
             }
             catch (Exception ex) { _logger.LogError(ex, "SaveTripAsync id={Id}", t.Id); }
@@ -364,6 +366,7 @@ namespace JoRideBackend.Services
             PaidAt            = d.ContainsField("paidAt") ? d.GetValue<Timestamp>("paidAt").ToDateTime() : null,
             DigitalKeyEnabled = d.ContainsField("digitalKeyEnabled") && d.GetValue<bool>("digitalKeyEnabled"),
             Status            = Str(d, "status"),
+            OverdueFlaggedAt  = d.ContainsField("overdueFlaggedAt") ? d.GetValue<Timestamp>("overdueFlaggedAt").ToDateTime() : null,
         };
 
         private static Notification DocToNotification(DocumentSnapshot d) => new()

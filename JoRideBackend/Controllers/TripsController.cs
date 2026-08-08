@@ -81,6 +81,38 @@ public class TripsController : ControllerBase
         return trip is null ? NotFound() : trip;
     }
 
+    // E4.3: admin-only visibility into overdue trips so ops can decide whether to intervene.
+    // Computed live against the same threshold OverdueTripMonitorService uses, rather than
+    // just reading the OverdueFlaggedAt cache, so this is accurate even between poll ticks.
+    // This endpoint only reports — it never calls DeviceCommandService itself; any
+    // immobilize/lock action stays a deliberate, separate admin call to that controller.
+    [Authorize]
+    [HttpGet("overdue")]
+    public ActionResult<IEnumerable<object>> GetOverdue()
+    {
+        if (!User.HasClaim("role", "admin")) return Forbid();
+
+        var now = DateTime.UtcNow;
+        var overdue = trips
+            .Where(t => t.Status == "InProgress"
+                     && t.EndTime is null
+                     && t.ScheduledEndTime.HasValue
+                     && now > t.ScheduledEndTime.Value.ToUniversalTime() + OverdueTripMonitorService.GracePeriod)
+            .OrderByDescending(t => t.ScheduledEndTime)
+            .Select(t => new
+            {
+                t.Id,
+                t.UserId,
+                t.VehicleId,
+                t.ScheduledEndTime,
+                minutesOverdue = (int)Math.Round((now - t.ScheduledEndTime!.Value.ToUniversalTime()).TotalMinutes),
+                t.OverdueFlaggedAt,
+                notified = t.OverdueFlaggedAt is not null,
+            });
+
+        return Ok(overdue);
+    }
+
     // Booking gate (E2.2): only KYC-Approved, authenticated users may start a trip. This
     // checks the CALLER's own "kycStatus" claim (see JwtTokenService/KycApprovedRequirement).
     [Authorize(Policy = "KycApproved")]
