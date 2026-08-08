@@ -1,0 +1,92 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..a210386
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,32 @@
++# Copy to .env (or set as real environment variables / GitHub Actions secrets).
++# Never commit a filled-in .env — it is already in .gitignore.
++
++# JWT
++JWT_KEY=replace_with_32_char_random_hs256_key
++
++# Firebase
++FIREBASE_PROJECT_ID=joride-e049b
++FIREBASE_ADMINSDK_JSON_PATH=/secure/path/joride-e049b-firebase-adminsdk-fbsvc.json
++
++# Twilio (OTP)
++TWILIO_ACCOUNT_SID=
++TWILIO_AUTH_TOKEN=
++TWILIO_FROM_NUMBER=
++
++# SMTP
++SMTP_HOST=smtp.gmail.com
++SMTP_PORT=587
++SMTP_USER=
++SMTP_PASSWORD=
++
++# Traccar
++TRACCAR_BASE_URL=
++TRACCAR_TOKEN=
++
++# Postgres (payments/device-command store — added in E0.5)
++POSTGRES_CONNECTION_STRING=Host=localhost;Port=5432;Database=joride;Username=joride;Password=replace_me
++
++# HyperPay (added in E5)
++HYPERPAY_ENTITY_ID=
++HYPERPAY_ACCESS_TOKEN=
++HYPERPAY_WEBHOOK_SECRET=
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..620dc25
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,35 @@
++name: CI
++
++on:
++  push:
++    branches: [main, master]
++  pull_request:
++    branches: [main, master]
++
++jobs:
++  build-and-test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Setup .NET
++        uses: actions/setup-dotnet@v4
++        with:
++          dotnet-version: '8.0.x'
++
++      - name: Restore
++        run: dotnet restore JoRideBackend.sln
++
++      - name: Build
++        run: dotnet build JoRideBackend.sln --no-restore --configuration Release
++
++      - name: Test
++        run: dotnet test JoRideBackend.sln --no-build --configuration Release --verbosity normal
++        continue-on-error: true
++        # continue-on-error kept until a test project exists (E0 has no tests yet);
++        # remove this line once tests/ is added so CI actually gates PRs.
++
++      - name: Secret scan (gitleaks)
++        uses: gitleaks/gitleaks-action@v2
++        env:
++          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+diff --git a/README.md b/README.md
+index 7e6de7c..8aadb9e 100644
+--- a/README.md
++++ b/README.md
+@@ -5,7 +5,7 @@
+ [![JWT](https://img.shields.io/badge/Auth-JWT_Bearer-000000?logo=jsonwebtokens)](https://jwt.io/)
+ [![Swagger](https://img.shields.io/badge/Docs-Swagger_UI-85EA2D?logo=swagger)](https://swagger.io/)
+ 
+-REST API powering the **JoRide** car-rental / ride-sharing platform for Jordan. Handles user accounts, JWT authentication, vehicle fleet management, trip lifecycle (book → drive → return), in-app wallet payments, OTP verification, digital car keys, push notifications, real-time GPS tracking via Traccar, and an admin dashboard.
++REST API powering the **JoRide** self-drive car-sharing platform for Jordan. Handles user accounts, JWT authentication, vehicle fleet management, trip lifecycle (book → drive → return), in-app wallet payments, OTP verification, digital car keys, push notifications, real-time GPS tracking via Traccar, and an admin dashboard.
+ 
+ > **Related:** [joride-frontend](https://github.com/omaralrayyan7/joride-frontend) — Flutter mobile app
+ 
