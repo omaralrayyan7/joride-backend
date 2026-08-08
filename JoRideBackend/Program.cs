@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
+using Polly;
+using Polly.Extensions.Http;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -66,8 +68,31 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddMemoryCache();
-builder.Services.AddHttpClient("traccar"); // used by TraccarService
+builder.Services.AddHttpClient("traccar"); // used by TraccarService for OsmAnd position pushes
+
+// REST API client for reading devices/positions/server status back from Traccar.
+// TRACCAR_BASE_URL / TRACCAR_TOKEN are optional at startup (health check and
+// polling simply report unavailable if unset) but required to actually call it.
+var traccarBaseUrl = builder.Configuration["TRACCAR_BASE_URL"];
+var traccarToken = builder.Configuration["TRACCAR_TOKEN"];
+builder.Services.AddHttpClient("traccar-rest", client =>
+    {
+        if (!string.IsNullOrWhiteSpace(traccarBaseUrl))
+        {
+            client.BaseAddress = new Uri(traccarBaseUrl.TrimEnd('/') + "/");
+        }
+        if (!string.IsNullOrWhiteSpace(traccarToken))
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", traccarToken);
+        }
+    })
+    .AddPolicyHandler(HttpPolicyExtensions
+        .HandleTransientHttpError()
+        .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
+
 builder.Services.AddSingleton<JoRideBackend.Services.TraccarService>();
+builder.Services.AddHostedService<TraccarPollingService>();
 builder.Services.AddSingleton<IOtpService, OtpService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
@@ -99,7 +124,8 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(postgresConnectionString));
 
 builder.Services.AddHealthChecks()
-    .AddCheck<PostgresHealthCheck>("postgres");
+    .AddCheck<PostgresHealthCheck>("postgres")
+    .AddCheck<TraccarHealthCheck>("traccar");
 
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
 if (string.IsNullOrWhiteSpace(jwt.Key) || Encoding.UTF8.GetByteCount(jwt.Key) < 32)
