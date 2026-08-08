@@ -38,12 +38,17 @@ public class WalletController : ControllerBase
     /// call — are the ONLY places allowed to write to a wallet:{userId} ledger account;
     /// User.WalletBalance itself is just a cache of the ledger balance (see its doc comment).
     /// </summary>
-    private static Task RecordWalletLedgerEntryAsync(string debitAccount, string creditAccount, decimal amount, string reference)
+    private static async Task RecordWalletLedgerEntryAsync(string debitAccount, string creditAccount, decimal amount, string reference)
     {
-        if (_scopeFactory is null) return Task.CompletedTask; // not wired (e.g. some test contexts) — cache-only fallback
+        if (_scopeFactory is null) return; // not wired (e.g. some test contexts) — cache-only fallback
+        // Must be `await`ed, not returned directly: a bare `using var scope` disposes the
+        // scope (and its scoped PaymentsDbContext) as soon as this method returns control to
+        // the caller, which — for a non-async method just returning the inner Task — happens
+        // before that Task's body has actually run. Awaiting keeps the scope alive until the
+        // ledger write really completes.
         using var scope = _scopeFactory.CreateScope();
         var ledger = scope.ServiceProvider.GetRequiredService<LedgerService>();
-        return ledger.RecordTransactionAsync(debitAccount, creditAccount, amount, reference);
+        await ledger.RecordTransactionAsync(debitAccount, creditAccount, amount, reference);
     }
 
 

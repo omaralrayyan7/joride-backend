@@ -32,6 +32,8 @@ namespace JoRideBackend.Models
 
     public record EndTripRequest(DateTime EndTime);
 
+    public record CancelTripRequest(string? Reason = null);
+
     public record UpdateProfileRequest(string? Name, string? Phone, string? ProfileImageUrl);
 
     public record TopUpRequest(decimal Amount, string? PaymentMethod, string? Reference = null);

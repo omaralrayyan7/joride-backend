@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using JoRideBackend.Models;
 using JoRideBackend.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -11,6 +12,30 @@ public class TripsController : ControllerBase
     static int _nextId = 1;
     internal static FirestoreService? _firestore;
     internal static TraccarService? _traccar;
+
+    // ── E3.1: per-vehicle async lock ────────────────────────────────────────
+    // Trips are Firestore-backed, but the actual synchronous source of truth
+    // during request handling is this process' in-memory `trips` list — two
+    // concurrent ASP.NET Core requests both read/mutate that same list before
+    // either one's Firestore write lands. A Firestore transaction (the task's
+    // literal wording) would not protect against that; it would only protect
+    // against two separate PROCESSES racing on the Firestore document, which
+    // isn't the actual race here. The correct guard is an in-process lock
+    // around the "check overlap, then reserve" critical section, scoped per
+    // vehicle so unrelated vehicles' bookings don't serialize against each
+    // other. C#'s `lock` can't wrap an `await`, so this uses SemaphoreSlim —
+    // the same pattern AuditController's static list already uses `lock` for,
+    // adapted for async.
+    static readonly ConcurrentDictionary<int, SemaphoreSlim> _vehicleLocks = new();
+    static SemaphoreSlim VehicleLock(int vehicleId) => _vehicleLocks.GetOrAdd(vehicleId, _ => new SemaphoreSlim(1, 1));
+
+    static bool HasOverlap(int vehicleId, DateTime windowStart, DateTime windowEnd, int? excludeTripId = null) =>
+        trips.Any(t =>
+            t.VehicleId == vehicleId &&
+            t.Id != excludeTripId &&
+            t.Status == "InProgress" &&
+            t.StartTime < windowEnd &&
+            windowStart < (t.ScheduledEndTime ?? DateTime.MaxValue));
 
     public static void Initialize(List<Trip> loaded, FirestoreService fs)
     {
@@ -97,6 +122,57 @@ public class TripsController : ControllerBase
             _ => now
         };
 
+        // ── E3.1: atomic overlap check + reservation ────────────────────────
+        // Everything between acquiring the per-vehicle lock and adding `trip`
+        // to the list (or bailing out) is the critical section: it re-checks
+        // the overlap definitively (the earlier VehiclesController.IsAvailable
+        // check above is only a fast-path/UX check — it's not race-safe on its
+        // own) and reserves the slot by inserting the Trip row while still
+        // holding the lock, so a second concurrent request for the same
+        // vehicle can only acquire the lock AFTER this one's reservation is
+        // already visible in `trips`.
+        Trip trip;
+        var vehicleLock = VehicleLock(request.VehicleId);
+        await vehicleLock.WaitAsync();
+        try
+        {
+            if (HasOverlap(request.VehicleId, now, scheduledEnd))
+            {
+                return Conflict("Vehicle unavailable: it is already booked for an overlapping time window.");
+            }
+
+            trip = new Trip
+            {
+                Id = _nextId++,
+                UserId = request.UserId,
+                VehicleId = request.VehicleId,
+                StartTime = now,
+                ScheduledEndTime = scheduledEnd,
+                EndTime = null,
+                Duration = request.Duration,
+                DurationType = request.DurationType,
+                BaseFare = request.BaseFare,
+                BookingFee = request.BookingFee,
+                Tax = request.Tax,
+                TotalFare = request.TotalFare,
+                PaymentMethod = request.PaymentMethod,
+                PaymentStatus = "Pending",
+                PaidAt = null,
+                DigitalKeyEnabled = true,
+                Status = "InProgress",
+            };
+
+            trips.Add(trip);
+            VehiclesController.SetStatus(trip.VehicleId, "InUse");
+        }
+        finally
+        {
+            vehicleLock.Release();
+        }
+
+        // Payment happens outside the lock — it doesn't affect the overlap
+        // invariant, and slower external gateways shouldn't hold the vehicle
+        // lock. If it fails, roll back the reservation under the same lock.
         var paid = await WalletController.TryChargeAsync(
             request.UserId,
             request.TotalFare,
@@ -105,32 +181,22 @@ public class TripsController : ControllerBase
 
         if (!paid)
         {
+            await vehicleLock.WaitAsync();
+            try
+            {
+                trips.Remove(trip);
+                VehiclesController.SetStatus(trip.VehicleId, "Available");
+            }
+            finally
+            {
+                vehicleLock.Release();
+            }
+
             return BadRequest("Payment failed or wallet balance is not enough. Digital key was not issued.");
         }
 
-        var trip = new Trip
-        {
-            Id = _nextId++,
-            UserId = request.UserId,
-            VehicleId = request.VehicleId,
-            StartTime = now,
-            ScheduledEndTime = scheduledEnd,
-            EndTime = null,
-            Duration = request.Duration,
-            DurationType = request.DurationType,
-            BaseFare = request.BaseFare,
-            BookingFee = request.BookingFee,
-            Tax = request.Tax,
-            TotalFare = request.TotalFare,
-            PaymentMethod = request.PaymentMethod,
-            PaymentStatus = "Paid",
-            PaidAt = now,
-            DigitalKeyEnabled = true,
-            Status = "InProgress",
-        };
-
-        trips.Add(trip);
-        VehiclesController.SetStatus(trip.VehicleId, "InUse");
+        trip.PaymentStatus = "Paid";
+        trip.PaidAt = now;
         await (_firestore?.SaveTripAsync(trip) ?? Task.CompletedTask);
 
         // ── Notify Traccar: vehicle booked ────────────────────────────────────
@@ -284,6 +350,71 @@ public class TripsController : ControllerBase
         AuditController.Log("TripEnded", "Trip", trip.Id,
             $"User: {endUserName} (#{trip.UserId})", "User",
             $"Vehicle #{trip.VehicleId} ({endedVehicle?.LicensePlate}). Final {trip.TotalFare:F2} JOD.{overtimeText}");
+
+        return trip;
+    }
+
+    // ── E3.2: cancellation with policy-tiered fee ───────────────────────────
+    // State machine: only a still-InProgress, not-yet-ended trip is
+    // cancellable. Trips are already fully paid at booking time (see Start),
+    // so "cancel" here means: end the rental now, then refund whatever the
+    // policy tier says is owed back — the unrefunded remainder IS the fee.
+    // That fee needs no separate ledger entry: it's already sitting in
+    // revenue:payments from the original charge (see WalletController.
+    // TryChargeAsync) and is left untouched, exactly like the early-return
+    // refund logic in End() above. Writing an extra "fee" entry for the same
+    // money would double-count revenue that was already recognized at
+    // booking. See CancellationPolicy.cs for the tier interpretation.
+    [Authorize]
+    [HttpPost("{id:int}/cancel")]
+    public async Task<ActionResult<Trip>> Cancel(int id, [FromBody] CancelTripRequest? request)
+    {
+        var trip = trips.FirstOrDefault(t => t.Id == id);
+        if (trip is null) return NotFound();
+
+        var callerId = User.FindFirst("sub")?.Value;
+        var isAdmin = User.HasClaim("role", "admin");
+        if (!isAdmin && (callerId is null || !int.TryParse(callerId, out var callerIdInt) || callerIdInt != trip.UserId))
+        {
+            return Forbid();
+        }
+
+        if (trip.Status != "InProgress" || trip.EndTime is not null)
+        {
+            return BadRequest($"Trip cannot be cancelled: it is already {(trip.Status == "InProgress" ? "completed" : trip.Status?.ToLowerInvariant())}.");
+        }
+
+        var now = DateTime.UtcNow;
+        var outcome = CancellationPolicy.Evaluate(now, trip.ScheduledEndTime?.ToUniversalTime(), trip.TotalFare);
+
+        trip.EndTime = now;
+        trip.Status = "Cancelled";
+        trip.DigitalKeyEnabled = false;
+        VehiclesController.SetStatus(trip.VehicleId, "Available");
+
+        if (outcome.RefundAmount > 0)
+        {
+            trip.TotalFare -= outcome.RefundAmount;
+            await WalletController.RefundAsync(
+                trip.UserId,
+                outcome.RefundAmount,
+                $"Cancellation refund for trip #{trip.Id} ({outcome.Tier} tier, reason: {request?.Reason ?? "unspecified"})");
+        }
+
+        await (_firestore?.SaveTripAsync(trip) ?? Task.CompletedTask);
+
+        NotificationsController.Push(
+            trip.UserId,
+            "Trip Cancelled",
+            outcome.FeeAmount > 0
+                ? $"Your trip was cancelled. A {outcome.FeeAmount:F2} JOD cancellation fee applies ({outcome.Tier} tier); {outcome.RefundAmount:F2} JOD refunded."
+                : "Your trip was cancelled. Full amount refunded.",
+            "booking");
+
+        var cancelUserName = UsersController.GetUser(trip.UserId)?.Name ?? "?";
+        AuditController.Log("TripCancelled", "Trip", trip.Id,
+            $"User: {cancelUserName} (#{trip.UserId})", isAdmin ? "Admin" : "User",
+            $"Tier: {outcome.Tier}. Refunded {outcome.RefundAmount:F2} JOD, fee retained {outcome.FeeAmount:F2} JOD.");
 
         return trip;
     }
