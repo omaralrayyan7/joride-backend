@@ -18,6 +18,11 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.10" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
     <PackageReference Include="Twilio" Version="7.14.9" />
+
+    <!-- E8.1: pulled in transitively (below the fixed version) by one of the above; pinned
+         directly to force resolution past CVE-2026-26127 (GHSA-73j8-2gch-69rq, High) — an
+         out-of-bounds read decoding malformed Base64Url input, fixed in 9.0.14. -->
+    <PackageReference Include="Microsoft.Bcl.Memory" Version="9.0.14" />
   </ItemGroup>
 
 </Project>

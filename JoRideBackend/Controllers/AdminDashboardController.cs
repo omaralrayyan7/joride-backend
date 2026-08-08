@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using JoRideBackend.Data;
 using JoRideBackend.Models.Payments;
 using Microsoft.AspNetCore.Authorization;
@@ -6,7 +7,10 @@ using Microsoft.EntityFrameworkCore;
 
 namespace JoRideBackend.Controllers
 {
-    public record CommandNoteRequest(int VehicleId, string CommandType, string Reason);
+    public record CommandNoteRequest(
+        int VehicleId,
+        [Required, StringLength(20)] string CommandType,
+        [Required, StringLength(1000, MinimumLength = 1)] string Reason);
 
     /// <summary>
     /// E7: read-only/note-taking endpoints that exist purely to feed the new admin

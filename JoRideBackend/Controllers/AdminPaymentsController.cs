@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Security.Claims;
 using System.Text;
@@ -5,8 +6,8 @@ using JoRideBackend.Services.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-public record PartialCaptureRequest(decimal Amount);
-public record RejectTopUpRequest(string Reason);
+public record PartialCaptureRequest([Range(0.01, 100000)] decimal Amount);
+public record RejectTopUpRequest([Required, StringLength(1000, MinimumLength = 1)] string Reason);
 
 /// <summary>
 /// Admin-only money actions needing a human in the loop: partial capture and manual top-up

@@ -1,5 +1,6 @@
 using JoRideBackend.Services.Payments;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 /// <summary>
 /// Receives HyperPay payment-status notifications.
@@ -44,6 +45,7 @@ public class HyperPayWebhookController : ControllerBase
         _webhooks = webhooks;
     }
 
+    [EnableRateLimiting("payment-webhook")]
     [HttpPost("hyperpay")]
     public async Task<IActionResult> ReceiveWebhook(CancellationToken ct)
     {

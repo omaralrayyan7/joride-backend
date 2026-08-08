@@ -208,6 +208,42 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
         }));
+
+    // E8.1: rate limiting audit found auth/OTP were the only gated endpoints — payment and
+    // device-actuation endpoints had none. Both are already behind [Authorize] (or, for the
+    // webhook, HMAC/AES-GCM payload verification), but auth alone doesn't stop a valid,
+    // rate-unlimited caller (or a compromised token) from hammering a gateway call or a
+    // vehicle-actuation command.
+    options.AddPolicy("payment-checkout", http => RateLimitPartition.GetFixedWindowLimiter(
+        PartitionKey(http),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+
+    // Webhooks are server-to-server (HyperPay calling us, not an end user), so this is
+    // deliberately looser than the user-facing policies above — legitimate retry/burst
+    // traffic from the provider shouldn't be throttled — but still caps the cost of
+    // repeated failed-auth decrypt attempts against this endpoint from any one source.
+    options.AddPolicy("payment-webhook", http => RateLimitPartition.GetFixedWindowLimiter(
+        PartitionKey(http),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+
+    options.AddPolicy("device-command", http => RateLimitPartition.GetFixedWindowLimiter(
+        PartitionKey(http),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
 });
 
 var app = builder.Build();
@@ -231,6 +267,28 @@ else
     app.UseHsts();
     app.UseHttpsRedirection();
 }
+
+// E8.1: standard security response headers, applied to every response (API JSON and the
+// Razor admin dashboard alike). HSTS is handled separately above via the built-in
+// app.UseHsts() (prod-only, since it doesn't make sense over plain HTTP in dev).
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+
+    // Verified against Swashbuckle's actual SwaggerUI output (GET /swagger/index.html): it
+    // loads swagger-ui-bundle.js/swagger-ui-standalone-preset.js/index.js as external,
+    // same-origin <script src> files — no inline <script>/<style> anywhere — so 'self'
+    // covers it too, same as the admin dashboard and default MVC views. Applied in every
+    // environment; no need to loosen this for dev-only tooling.
+    headers["Content-Security-Policy"] =
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+        "object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+
+    await next();
+});
 
 app.UseStaticFiles();
 app.UseRouting();

@@ -1,8 +1,10 @@
+using System.ComponentModel.DataAnnotations;
 using JoRideBackend.Data;
 using JoRideBackend.Models.Payments;
 using JoRideBackend.Services.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 /// <summary>
 /// Amount is required; TripId is optional and, per PaymentIntent's actual schema
@@ -12,7 +14,11 @@ using Microsoft.AspNetCore.Mvc;
 /// (PendingTopUp is the unrelated, separate manual-reconciliation flow — see
 /// WalletController.TopUp/AdminPaymentsController).
 /// </summary>
-public record CreateHyperPayCheckoutRequest(int UserId, decimal Amount, int? TripId = null, string Currency = "USD");
+public record CreateHyperPayCheckoutRequest(
+    int UserId,
+    [Range(0.01, 100000)] decimal Amount,
+    int? TripId = null,
+    [StringLength(3, MinimumLength = 3)] string Currency = "USD");
 
 /// <summary>
 /// Starts a HyperPay Copy&amp;Pay checkout: creates a PaymentIntent (Created state — this
@@ -37,6 +43,7 @@ public class HyperPayCheckoutController : ControllerBase
         _gateway = gateway;
     }
 
+    [EnableRateLimiting("payment-checkout")]
     [HttpPost("checkout")]
     public async Task<IActionResult> CreateCheckout([FromBody] CreateHyperPayCheckoutRequest request, CancellationToken ct)
     {

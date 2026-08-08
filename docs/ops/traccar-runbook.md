@@ -72,3 +72,44 @@ With real hardware, confirmation should instead watch for the expected
 telemetry change (e.g. actual speed/ignition state after an Immobilize) before
 marking a command Confirmed. This is intentionally deferred until real
 hardware exists to test against.
+
+## 7. Production network exposure — Traccar must NOT be public (E8.1)
+
+In dev, `TRACCAR_BASE_URL=http://localhost:8083` (see `.env.example`) points at
+a Traccar instance running unauthenticated-by-network on localhost — fine on a
+developer machine, **not fine in production**. Before any real deployment:
+
+- **The Traccar web UI/API port (8082 web UI / 8083 in this project's dev
+  config, and the device-ingest ports 5027/5055/etc.) must sit on a private
+  network — a VPC subnet, an internal-only security group, or behind a VPN —
+  never bound to a public IP or exposed through a public load balancer/ingress.**
+  Traccar has its own login, but that login is not a substitute for network
+  isolation: it's an additional layer, not the perimeter. A public Traccar
+  instance is a direct path to live vehicle position data and (if reachable)
+  device command dispatch, entirely outside this backend's own auth/rate
+  limiting/audit trail.
+- This backend (`JoRideBackend`) is the only thing that should be able to
+  reach Traccar's REST API (`TRACCAR_BASE_URL`) — from inside the same private
+  network/VPC, not over the public internet. `TRACCAR_TOKEN` should be scoped
+  to what the REST calls this app actually makes (device/position reads,
+  command dispatch), not a full-admin Traccar account, per least privilege.
+- The **inbound** direction — Traccar calling back into this app
+  (`POST /api/payments/webhooks/hyperpay` is a *different* webhook; the
+  Traccar-side one is `POST /api/traccar/events`, see
+  `traccar-event-forwarding.md`) — is the only Traccar-related surface that
+  legitimately needs to be internet-reachable, and it already has its own
+  HMAC-signature verification (`TRACCAR_WEBHOOK_SECRET`) independent of
+  network placement.
+- Device ingest ports (5027 Codec8E, 5055 OsmAnd, etc.) need to be reachable
+  by the physical FMC130 units in the field over their cellular APN — that's
+  a narrower, deliberate exception to "private network only," and should be
+  restricted at the firewall to the ingest ports specifically, not used as
+  justification for exposing the web UI/REST API port too.
+
+Verification checklist for a production cutover:
+- [ ] `curl`/`nmap` the deployment's public IP(s) and confirm the Traccar web
+      UI/API port does **not** respond from outside the private network/VPN.
+- [ ] Confirm `TRACCAR_BASE_URL` used by this backend resolves to a private
+      (internal) address, not a public DNS name/IP.
+- [ ] Confirm `TRACCAR_TOKEN` is a scoped credential, not a Traccar admin
+      account's own login token.

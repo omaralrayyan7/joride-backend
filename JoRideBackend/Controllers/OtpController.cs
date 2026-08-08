@@ -1,4 +1,5 @@
-﻿using JoRideBackend.Services;
+﻿using System.ComponentModel.DataAnnotations;
+using JoRideBackend.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -17,10 +18,14 @@ public class OtpController : ControllerBase
         _email = email;
     }
 
-    public record SendSmsOtpRequest(string PhoneNumber);
-    public record SendEmailOtpRequest(string Email);
-    public record VerifySmsOtpRequest(string PhoneNumber, string Code);
-    public record VerifyEmailOtpRequest(string Email, string Code);
+    public record SendSmsOtpRequest([Required, StringLength(30, MinimumLength = 1)] string PhoneNumber);
+    public record SendEmailOtpRequest([Required, EmailAddress, StringLength(320)] string Email);
+    public record VerifySmsOtpRequest(
+        [Required, StringLength(30, MinimumLength = 1)] string PhoneNumber,
+        [Required, StringLength(10, MinimumLength = 1)] string Code);
+    public record VerifyEmailOtpRequest(
+        [Required, EmailAddress, StringLength(320)] string Email,
+        [Required, StringLength(10, MinimumLength = 1)] string Code);
 
     // POST /api/otp/send
     [EnableRateLimiting("auth-otp")]

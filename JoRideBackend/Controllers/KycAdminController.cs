@@ -1,9 +1,10 @@
+using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using JoRideBackend.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-public record KycReviewRequest(string Reason);
+public record KycReviewRequest([Required, StringLength(1000, MinimumLength = 1)] string Reason);
 
 /// <summary>
 /// Admin review of a user's KYC status. Uses AuditController — the existing

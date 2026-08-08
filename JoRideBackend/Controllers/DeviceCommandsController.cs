@@ -2,6 +2,7 @@ using JoRideBackend.Models.Payments;
 using JoRideBackend.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 /// <summary>
 /// Security-critical: the only HTTP surface that can actuate a vehicle. See
@@ -21,6 +22,7 @@ public class DeviceCommandsController : ControllerBase
         _commands = commands;
     }
 
+    [EnableRateLimiting("device-command")]
     [HttpPost("{type}")]
     public async Task<IActionResult> RequestCommand(int vehicleId, string type, CancellationToken ct)
     {
