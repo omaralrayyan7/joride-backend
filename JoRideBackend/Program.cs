@@ -1,9 +1,12 @@
 using Microsoft.OpenApi.Models;
 using System.Text;
+using JoRideBackend.Data;
 using JoRideBackend.Models;
 using JoRideBackend.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 
 
@@ -76,6 +79,28 @@ builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddSingleton<FirestoreService>();
 builder.Services.AddHostedService<FirestoreDataLoader>();
 
+// Relational store for money and device commands only (Firestore remains the store
+// of record for users/vehicles/trips). Connection string comes from the
+// POSTGRES_CONNECTION_STRING env var; a local default is allowed only in Development
+// so `dotnet run` works against docker-compose.dev.yml without extra setup.
+var postgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"];
+if (string.IsNullOrWhiteSpace(postgresConnectionString))
+{
+    if (!builder.Environment.IsDevelopment())
+    {
+        throw new InvalidOperationException(
+            "POSTGRES_CONNECTION_STRING must be set in non-Development environments.");
+    }
+
+    postgresConnectionString = "Host=localhost;Port=5433;Database=joride;Username=joride;Password=joride_dev_password";
+}
+
+builder.Services.AddDbContext<PaymentsDbContext>(options =>
+    options.UseNpgsql(postgresConnectionString));
+
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgresHealthCheck>("postgres");
+
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
 if (string.IsNullOrWhiteSpace(jwt.Key) || Encoding.UTF8.GetByteCount(jwt.Key) < 32)
 {
@@ -138,5 +163,7 @@ app.UseAuthorization();
 app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=Index}/{id?}");
+
+app.MapHealthChecks("/health");
 
 app.Run();

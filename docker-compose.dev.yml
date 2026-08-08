@@ -1,0 +1,32 @@
+# Local development only: Postgres for PaymentsDbContext (money + device commands).
+# Not used for Firestore-backed data (users/vehicles/trips).
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# Then run the API with a matching connection string, e.g.:
+#   POSTGRES_CONNECTION_STRING="Host=localhost;Port=5433;Database=joride;Username=joride;Password=joride_dev_password" dotnet run --project JoRideBackend --launch-profile http
+#
+# Host port defaults to 5433 (not 5432) because a locally installed Postgres
+# service commonly already owns 5432 on dev machines. Override with
+# POSTGRES_HOST_PORT if 5433 is also taken.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: joride
+      POSTGRES_USER: joride
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-joride_dev_password}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - joride_postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U joride -d joride"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  joride_postgres_dev_data:
