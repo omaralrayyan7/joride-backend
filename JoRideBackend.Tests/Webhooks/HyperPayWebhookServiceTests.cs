@@ -17,7 +17,8 @@ public class HyperPayWebhookServiceTests
             .Options;
         var db = new PaymentsDbContext(options);
         var config = BuildConfig(secret);
-        var service = new HyperPayWebhookService(db, config, NullLogger<HyperPayWebhookService>.Instance);
+        var ledger = new LedgerService(db, NullLogger<LedgerService>.Instance);
+        var service = new HyperPayWebhookService(db, ledger, config, NullLogger<HyperPayWebhookService>.Instance);
         return (db, service, secret);
     }
 
@@ -85,6 +86,11 @@ public class HyperPayWebhookServiceTests
         var reloaded = await db.PaymentIntents.FindAsync(intent.Id);
         Assert.Equal(PaymentIntentState.Authorized, reloaded!.State);
         Assert.Equal("/v1/payments/txn-1", reloaded.ProviderRef); // recorded for future CP/RV/RF
+
+        var holdEntry = Assert.Single(await db.LedgerEntries.Where(e => e.PaymentIntentId == intent.Id).ToListAsync());
+        Assert.Equal("pending_authorizations", holdEntry.DebitAccount);
+        Assert.Equal($"card_customer:{intent.UserId}:holds", holdEntry.CreditAccount);
+        Assert.Equal(intent.Amount, holdEntry.Amount);
     }
 
     [Fact]
@@ -101,6 +107,13 @@ public class HyperPayWebhookServiceTests
 
         Assert.Equal(HyperPayWebhookOutcome.Accepted, result.Outcome);
         Assert.Equal(PaymentIntentState.Captured, (await db.PaymentIntents.FindAsync(intent.Id))!.State);
+
+        // Capture writes two entries: releasing the hold, and recording the actual revenue.
+        var entries = await db.LedgerEntries.Where(e => e.PaymentIntentId == intent.Id).ToListAsync();
+        Assert.Equal(2, entries.Count);
+        Assert.Contains(entries, e => e.DebitAccount == $"card_customer:{intent.UserId}:holds" && e.CreditAccount == "pending_authorizations");
+        Assert.Contains(entries, e => e.DebitAccount == $"card_customer:{intent.UserId}:receivable" && e.CreditAccount == "revenue:trips");
+        Assert.All(entries, e => Assert.Equal(intent.Amount, e.Amount));
     }
 
     [Fact]
@@ -160,7 +173,8 @@ public class HyperPayWebhookServiceTests
         // A service configured with a DIFFERENT secret than the one used to encrypt — the
         // realistic "wrong/unverifiable" case (e.g. a forged request, or misconfiguration).
         var serviceWithWrongSecret = new HyperPayWebhookService(
-            db, BuildConfig(HyperPayWebhookTestHelper.RandomSecretHex()), NullLogger<HyperPayWebhookService>.Instance);
+            db, new LedgerService(db, NullLogger<LedgerService>.Instance),
+            BuildConfig(HyperPayWebhookTestHelper.RandomSecretHex()), NullLogger<HyperPayWebhookService>.Instance);
 
         var result = await serviceWithWrongSecret.ProcessAsync(bodyHex, ivHex, tagHex);
 
@@ -210,7 +224,9 @@ public class HyperPayWebhookServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         var db = new PaymentsDbContext(options);
-        var service = new HyperPayWebhookService(db, BuildConfig(secret: null), NullLogger<HyperPayWebhookService>.Instance);
+        var service = new HyperPayWebhookService(
+            db, new LedgerService(db, NullLogger<LedgerService>.Instance),
+            BuildConfig(secret: null), NullLogger<HyperPayWebhookService>.Instance);
 
         var result = await service.ProcessAsync("deadbeef", "aabb", "ccdd");
 

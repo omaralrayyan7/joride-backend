@@ -1,6 +1,8 @@
 using JoRideBackend.Models;
 using JoRideBackend.Services;
+using JoRideBackend.Services.Payments;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 
 [ApiController]
 [Route("api/wallet")]
@@ -10,12 +12,36 @@ public class WalletController : ControllerBase
     static int _nextId = 1;
     internal static FirestoreService? _firestore;
 
+    // LedgerService is a scoped service (it holds a scoped PaymentsDbContext), so it can't
+    // be captured directly into a static field the way the singleton TraccarService is
+    // elsewhere in this codebase — that would pin one DbContext instance across every
+    // request forever. Instead we hold the (singleton) scope factory and open a fresh
+    // scope per call, exactly like TraccarPollingService does for the same reason.
+    internal static IServiceScopeFactory? _scopeFactory;
+
     public static void Initialize(List<WalletTransaction> loaded, FirestoreService fs)
     {
         _transactions.Clear();
         _transactions.AddRange(loaded);
         _nextId    = loaded.Count > 0 ? loaded.Max(t => t.Id) + 1 : 1;
         _firestore = fs;
+    }
+
+    public static void SetServiceScopeFactory(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
+
+    private static string WalletAccount(int userId) => $"wallet:{userId}";
+
+    /// <summary>
+    /// Records the ledger effect of a wallet balance change. This — plus TopUp's own direct
+    /// call — are the ONLY places allowed to write to a wallet:{userId} ledger account;
+    /// User.WalletBalance itself is just a cache of the ledger balance (see its doc comment).
+    /// </summary>
+    private static Task RecordWalletLedgerEntryAsync(string debitAccount, string creditAccount, decimal amount, string reference)
+    {
+        if (_scopeFactory is null) return Task.CompletedTask; // not wired (e.g. some test contexts) — cache-only fallback
+        using var scope = _scopeFactory.CreateScope();
+        var ledger = scope.ServiceProvider.GetRequiredService<LedgerService>();
+        return ledger.RecordTransactionAsync(debitAccount, creditAccount, amount, reference);
     }
 
 
@@ -40,6 +66,10 @@ public class WalletController : ControllerBase
 
         if (usesInternalWallet)
         {
+            // Ledger first: it's the source of truth. WalletBalance is only ever written
+            // here, in RefundAsync, in RecordPayment, and in TopUp — nowhere else — so it
+            // stays a faithful cache of the ledger balance for wallet:{userId}.
+            await RecordWalletLedgerEntryAsync(WalletAccount(userId), "revenue:payments", amount, description);
             user.WalletBalance -= amount;   // may go negative when allowNegative == true
             await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
         }
@@ -66,6 +96,7 @@ public class WalletController : ControllerBase
         var user = UsersController.GetUser(userId);
         if (user is null) return;
 
+        await RecordWalletLedgerEntryAsync("revenue:refunds", WalletAccount(userId), amount, description);
         user.WalletBalance += amount;
         await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
 
@@ -87,6 +118,7 @@ public class WalletController : ControllerBase
         var user = UsersController.GetUser(userId);
         if (user is not null)
         {
+            _ = RecordWalletLedgerEntryAsync(WalletAccount(userId), "revenue:payments", amount, description);
             user.WalletBalance -= amount;
             _ = _firestore?.SaveUserAsync(user);   // persist wallet balance
         }
@@ -104,8 +136,15 @@ public class WalletController : ControllerBase
         _ = _firestore?.SaveTransactionAsync(t);   // fire-and-forget
     }
 
+    private readonly LedgerService _ledger;
+
+    public WalletController(LedgerService ledger)
+    {
+        _ledger = ledger;
+    }
+
     [HttpGet]
-    public IActionResult GetWallet([FromQuery] int userId)
+    public async Task<IActionResult> GetWallet([FromQuery] int userId)
     {
         var user = UsersController.GetUser(userId);
         if (user is null) return NotFound("User not found");
@@ -115,7 +154,13 @@ public class WalletController : ControllerBase
             .OrderByDescending(t => t.CreatedAt)
             .ToList();
 
-        return Ok(new { balance = user.WalletBalance, transactions });
+        // Authoritative balance: computed from the ledger, not read from the WalletBalance
+        // cache. (WalletBalance is kept in sync as a cache for the other places that still
+        // read it directly — see its doc comment on User — but this endpoint is the one
+        // place that should reflect the ledger even if that cache ever drifts.)
+        var balance = await _ledger.GetAccountBalanceAsync(WalletAccount(userId));
+
+        return Ok(new { balance, transactions });
     }
 
     [HttpPost("topup")]
@@ -127,6 +172,8 @@ public class WalletController : ControllerBase
         var user = UsersController.GetUser(userId);
         if (user is null) return NotFound("User not found");
 
+        await _ledger.RecordTransactionAsync(
+            "external:topup_provider", WalletAccount(userId), request.Amount, $"Top-up via {request.PaymentMethod ?? "unknown"}");
         user.WalletBalance += request.Amount;
         await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
 
@@ -148,6 +195,7 @@ public class WalletController : ControllerBase
             $"Your wallet has been topped up with {request.Amount:F2} JOD.",
             "payment");
 
-        return Ok(new { balance = user.WalletBalance, transaction = t });
+        var balance = await _ledger.GetAccountBalanceAsync(WalletAccount(userId));
+        return Ok(new { balance, transaction = t });
     }
 }

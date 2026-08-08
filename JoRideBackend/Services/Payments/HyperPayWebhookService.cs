@@ -43,12 +43,15 @@ namespace JoRideBackend.Services.Payments
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
         private readonly PaymentsDbContext _db;
+        private readonly LedgerService _ledger;
         private readonly IConfiguration _configuration;
         private readonly ILogger<HyperPayWebhookService> _logger;
 
-        public HyperPayWebhookService(PaymentsDbContext db, IConfiguration configuration, ILogger<HyperPayWebhookService> logger)
+        public HyperPayWebhookService(
+            PaymentsDbContext db, LedgerService ledger, IConfiguration configuration, ILogger<HyperPayWebhookService> logger)
         {
             _db = db;
+            _ledger = ledger;
             _configuration = configuration;
             _logger = logger;
         }
@@ -171,7 +174,55 @@ namespace JoRideBackend.Services.Payments
                 "[HyperPayWebhook] intentId={IntentId} paymentType={PaymentType} resultCode={ResultCode} -> {State}",
                 intent.Id, payload.PaymentType, payload.Result?.Code, intent.State);
 
+            // Ledger writes happen after the intent's own state is safely persisted (per the
+            // transition table on PaymentIntent, only Authorized/Captured/Voided/Refunded are
+            // reachable here — Failed moves no money, so there's nothing to record for it).
+            await RecordLedgerEntriesAsync(intent, ct);
+
             return new HyperPayWebhookProcessResult(HyperPayWebhookOutcome.Accepted, providerEventId);
+        }
+
+        /// <summary>
+        /// Records the ledger effect of a successful transition. Account naming keeps card
+        /// payments (this intent-driven flow) separate from the JoRide internal wallet
+        /// (wallet:{userId}, written by WalletController) — they are different liabilities
+        /// even for the same user.
+        /// </summary>
+        private async Task RecordLedgerEntriesAsync(PaymentIntent intent, CancellationToken ct)
+        {
+            var holdsAccount = $"card_customer:{intent.UserId}:holds";
+            var receivableAccount = $"card_customer:{intent.UserId}:receivable";
+
+            switch (intent.State)
+            {
+                case PaymentIntentState.Authorized:
+                    await _ledger.RecordTransactionAsync(
+                        "pending_authorizations", holdsAccount, intent.Amount, $"hold:{intent.Id}", intent.Id, ct);
+                    break;
+
+                case PaymentIntentState.Captured:
+                    // Release the hold, then record the actual capture as its own entry —
+                    // keeps "money authorized" and "money earned" separately auditable.
+                    await _ledger.RecordTransactionAsync(
+                        holdsAccount, "pending_authorizations", intent.Amount, $"hold-release:{intent.Id}", intent.Id, ct);
+                    await _ledger.RecordTransactionAsync(
+                        receivableAccount, "revenue:trips", intent.Amount, $"capture:{intent.Id}", intent.Id, ct);
+                    break;
+
+                case PaymentIntentState.Voided:
+                    await _ledger.RecordTransactionAsync(
+                        holdsAccount, "pending_authorizations", intent.Amount, $"void:{intent.Id}", intent.Id, ct);
+                    break;
+
+                case PaymentIntentState.Refunded:
+                    await _ledger.RecordTransactionAsync(
+                        "revenue:trips", receivableAccount, intent.Amount, $"refund:{intent.Id}", intent.Id, ct);
+                    break;
+
+                case PaymentIntentState.Failed:
+                case PaymentIntentState.Created:
+                    break; // no money moved
+            }
         }
 
         private static PaymentIntentState ResolveTargetState(string? paymentType, bool success)

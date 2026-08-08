@@ -131,6 +131,7 @@ builder.Services.AddScoped<JoRideBackend.Services.DeviceCommandService>();
 // there is no code path here that could ever resolve it in Development or Production.
 builder.Services.AddHttpClient("hyperpay");
 builder.Services.AddScoped<JoRideBackend.Services.Payments.IPaymentGateway, JoRideBackend.Services.Payments.HyperPayGateway>();
+builder.Services.AddScoped<JoRideBackend.Services.Payments.LedgerService>();
 builder.Services.AddScoped<JoRideBackend.Services.Payments.HyperPayWebhookService>();
 
 builder.Services.AddHealthChecks()
@@ -177,6 +178,7 @@ VehicleLocationController.Seed();
 
 // Wire TraccarService into the static TripsController field
 TripsController._traccar = app.Services.GetRequiredService<JoRideBackend.Services.TraccarService>();
+WalletController.SetServiceScopeFactory(app.Services.GetRequiredService<IServiceScopeFactory>());
 
 if (app.Environment.IsDevelopment())
 {

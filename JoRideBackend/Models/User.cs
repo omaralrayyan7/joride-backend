@@ -15,6 +15,18 @@ namespace JoRideBackend.Models
         public bool IsEmailVerified { get; set; }
         public bool IsPhoneVerified { get; set; }
         public DateTime CreatedAt { get; set; }
+
+        /// <summary>
+        /// CACHE, not source of truth. The real balance is SUM(ledger entries for
+        /// "wallet:{Id}") in the Postgres double-entry ledger (see LedgerService,
+        /// PaymentsDbContext.LedgerEntries) — GET /api/wallet computes it from there.
+        /// This field is kept in sync as a convenience for the other places that still read
+        /// it directly (AuthResponse/AuthUser, TripsController's own balance checks, etc.)
+        /// without a round-trip to Postgres. Read-only everywhere except
+        /// WalletController.TryChargeAsync/RefundAsync/RecordPayment/TopUp — those are the
+        /// only writers, and each one writes the matching ledger entry in the same breath.
+        /// Don't add another write path for this field without also writing to the ledger.
+        /// </summary>
         public decimal WalletBalance { get; set; } = 0m;
         public string? ProfileImageUrl { get; set; }
 
