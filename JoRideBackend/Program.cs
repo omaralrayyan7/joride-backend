@@ -125,6 +125,13 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
 
 builder.Services.AddScoped<JoRideBackend.Services.DeviceCommandService>();
 
+// E5.1 groundwork: real gateway only. FakePaymentGateway lives exclusively in the
+// JoRideBackend.Tests project (which this project has no reference to at all — see that
+// project's TestPaymentGatewayRegistration for the explicit "Testing" environment guard);
+// there is no code path here that could ever resolve it in Development or Production.
+builder.Services.AddHttpClient("hyperpay");
+builder.Services.AddScoped<JoRideBackend.Services.Payments.IPaymentGateway, JoRideBackend.Services.Payments.HyperPayGateway>();
+
 builder.Services.AddHealthChecks()
     .AddCheck<PostgresHealthCheck>("postgres")
     .AddCheck<TraccarHealthCheck>("traccar");
@@ -195,3 +202,7 @@ app.MapControllerRoute(
 app.MapHealthChecks("/health");
 
 app.Run();
+
+// Testability marker only (standard ASP.NET Core pattern for top-level-statement Program.cs):
+// lets a WebApplicationFactory<Program> in the test project boot this host. Adds no behavior.
+public partial class Program { }
