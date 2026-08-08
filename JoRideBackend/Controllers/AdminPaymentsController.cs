@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Security.Claims;
+using System.Text;
 using JoRideBackend.Services.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -79,6 +81,69 @@ public class AdminPaymentsController : ControllerBase
         {
             return Conflict(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// Read-only weekly payout report as a downloadable CSV. Per-vehicle, not per-owner
+    /// (see PaymentAdminService.GeneratePayoutReportAsync — no owner concept exists in the
+    /// schema yet). Writes no ledger entries and marks nothing as paid.
+    /// </summary>
+    [HttpGet("payouts/report")]
+    public async Task<IActionResult> PayoutReport(
+        [FromQuery] DateTime periodStart, [FromQuery] DateTime periodEnd, CancellationToken ct)
+    {
+        var (adminId, adminLabel) = GetActor();
+
+        IReadOnlyList<PayoutReportRow> rows;
+        try
+        {
+            rows = await _paymentAdmin.GeneratePayoutReportAsync(periodStart, periodEnd, adminId, adminLabel, ct);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        var csv = BuildCsv(rows, periodStart, periodEnd);
+        var fileName = $"payout-report-{periodStart:yyyyMMdd}-{periodEnd:yyyyMMdd}.csv";
+        return File(Encoding.UTF8.GetBytes(csv), "text/csv", fileName);
+    }
+
+    private static string BuildCsv(IReadOnlyList<PayoutReportRow> rows, DateTime periodStart, DateTime periodEnd)
+    {
+        var sb = new StringBuilder();
+
+        // TODO(business decision): no owner/partner concept exists in the schema yet
+        // (Vehicle has no OwnerId or similar) — rows below are grouped per-vehicle as a
+        // placeholder. Switch to owner grouping once that concept lands.
+        sb.AppendLine("# NOTE: grouped per-vehicle — no owner/partner concept exists in the schema yet.");
+        // TODO(business decision): no platform fee percentage has been configured anywhere
+        // (Payouts:PlatformFeePercent) — defaults to 0% until product/finance sets one.
+        sb.AppendLine("# NOTE: PlatformFee uses Payouts:PlatformFeePercent, defaulting to 0% (not yet set — business decision pending).");
+
+        sb.AppendLine("OwnerOrVehicleId,Name/Plate,PeriodStart,PeriodEnd,GrossRevenue,PlatformFee,NetPayout");
+        foreach (var row in rows)
+        {
+            sb.Append(CsvField(row.VehicleId?.ToString(CultureInfo.InvariantCulture) ?? "unassigned")).Append(',')
+              .Append(CsvField(row.NameOrPlate)).Append(',')
+              .Append(CsvField(periodStart.ToString("O"))).Append(',')
+              .Append(CsvField(periodEnd.ToString("O"))).Append(',')
+              .Append(CsvField(row.GrossRevenue.ToString("F2", CultureInfo.InvariantCulture))).Append(',')
+              .Append(CsvField(row.PlatformFee.ToString("F2", CultureInfo.InvariantCulture))).Append(',')
+              .Append(CsvField(row.NetPayout.ToString("F2", CultureInfo.InvariantCulture)))
+              .Append('\n');
+        }
+
+        return sb.ToString();
+    }
+
+    private static string CsvField(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+        {
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        }
+        return value;
     }
 
     private (int AdminId, string AdminLabel) GetActor()

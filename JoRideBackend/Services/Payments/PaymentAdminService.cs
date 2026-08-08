@@ -7,6 +7,15 @@ namespace JoRideBackend.Services.Payments
     public record PartialCaptureRequestResult(PaymentIntent Intent, decimal CapturedAmount, decimal ReleasedAmount);
 
     /// <summary>
+    /// One row of the weekly payout report. VehicleId is null for revenue that couldn't be
+    /// traced back to a vehicle (no Trip linked to the PaymentIntent) — see
+    /// PaymentAdminService.GeneratePayoutReportAsync for why that can happen and how it's
+    /// surfaced rather than silently dropped.
+    /// </summary>
+    public record PayoutReportRow(
+        int? VehicleId, string NameOrPlate, decimal GrossRevenue, decimal PlatformFeePercent, decimal PlatformFee, decimal NetPayout);
+
+    /// <summary>
     /// Admin-initiated money actions that need a human in the loop: partial capture (e.g. a
     /// damage fine withheld from a larger hold) and manual top-up reconciliation. Every
     /// method here writes exactly one PaymentAdminAudit row, unconditionally — see each
@@ -18,16 +27,18 @@ namespace JoRideBackend.Services.Payments
         private readonly IPaymentGateway _gateway;
         private readonly LedgerService _ledger;
         private readonly FirestoreService _firestore;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<PaymentAdminService> _logger;
 
         public PaymentAdminService(
             PaymentsDbContext db, IPaymentGateway gateway, LedgerService ledger, FirestoreService firestore,
-            ILogger<PaymentAdminService> logger)
+            IConfiguration configuration, ILogger<PaymentAdminService> logger)
         {
             _db = db;
             _gateway = gateway;
             _ledger = ledger;
             _firestore = firestore;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -204,6 +215,97 @@ namespace JoRideBackend.Services.Payments
                 topUp.Id, topUp.UserId, adminLabel, reason);
 
             return topUp;
+        }
+
+        /// <summary>
+        /// Read-only weekly payout report: for each vehicle, sums the revenue actually
+        /// recognized (revenue:trips from full captures, revenue:fines from partial
+        /// captures — see E5.3/E5.4) within [periodStart, periodEnd). Writes NO ledger
+        /// entries and marks nothing as paid — payouts are manual bank/CliQ transfers at
+        /// launch; "mark as paid" is future work.
+        ///
+        /// GROUPING: there is no owner/partner concept anywhere in this codebase yet
+        /// (Vehicle has no OwnerId or similar) — grouping is per-vehicle instead, as a
+        /// documented placeholder for real owner grouping once that concept exists.
+        ///
+        /// Revenue entries carry a PaymentIntentId but not a VehicleId directly — the trail
+        /// is LedgerEntry -> PaymentIntent.TripId -> Trip.VehicleId. Trip lives in Firestore
+        /// (via the in-memory TripsController), not Postgres, so that last hop is resolved
+        /// in memory rather than a SQL join. A PaymentIntent with no TripId (or a TripId
+        /// that doesn't resolve to a live trip) can't be traced to a vehicle; rather than
+        /// silently dropping that revenue, it's reported under a single explicit
+        /// "Unassigned" row so the total always reconciles to the real ledger sum.
+        ///
+        /// PLATFORM FEE: no fee percentage is configured anywhere in this codebase
+        /// (Payouts:PlatformFeePercent) — this is a real, unmade business decision, not an
+        /// oversight. Defaults to 0% until product/finance sets it.
+        /// </summary>
+        public async Task<IReadOnlyList<PayoutReportRow>> GeneratePayoutReportAsync(
+            DateTime periodStart, DateTime periodEnd, int adminUserId, string adminLabel, CancellationToken ct = default)
+        {
+            if (periodEnd <= periodStart)
+            {
+                throw new ArgumentException("periodEnd must be after periodStart.");
+            }
+
+            var feePercent = _configuration.GetValue<decimal?>("Payouts:PlatformFeePercent") ?? 0m;
+
+            var revenueEntries = await (
+                from e in _db.LedgerEntries
+                join p in _db.PaymentIntents on e.PaymentIntentId equals p.Id
+                where (e.CreditAccount == "revenue:trips" || e.CreditAccount == "revenue:fines")
+                      && e.CreatedAt >= periodStart && e.CreatedAt < periodEnd
+                select new { e.Amount, p.TripId }
+            ).ToListAsync(ct);
+
+            const int UnassignedVehicleId = 0; // sentinel: no vehicle could be resolved
+            var grossByVehicle = new Dictionary<int, decimal>();
+            foreach (var entry in revenueEntries)
+            {
+                var vehicleId = UnassignedVehicleId;
+                if (entry.TripId is int tripId)
+                {
+                    var trip = TripsController.GetTrip(tripId);
+                    if (trip is not null)
+                    {
+                        vehicleId = trip.VehicleId;
+                    }
+                }
+
+                grossByVehicle[vehicleId] = grossByVehicle.GetValueOrDefault(vehicleId) + entry.Amount;
+            }
+
+            var rows = new List<PayoutReportRow>();
+            foreach (var (vehicleId, gross) in grossByVehicle.OrderBy(kv => kv.Key))
+            {
+                var isUnassigned = vehicleId == UnassignedVehicleId;
+                var nameOrPlate = isUnassigned
+                    ? "Unassigned (no linked trip)"
+                    : VehiclesController.GetVehicleById(vehicleId)?.LicensePlate ?? $"Vehicle #{vehicleId}";
+                var fee = Math.Round(gross * feePercent / 100m, 2);
+
+                rows.Add(new PayoutReportRow(
+                    isUnassigned ? null : vehicleId, nameOrPlate, gross, feePercent, fee, gross - fee));
+            }
+
+            // Audit only — this method never touches LedgerEntries or marks anything paid.
+            _db.PaymentAdminAudits.Add(new PaymentAdminAudit
+            {
+                Id = Guid.NewGuid(),
+                Action = "PayoutReportGenerated",
+                AdminUserId = adminUserId,
+                AdminLabel = adminLabel,
+                Details = $"Period {periodStart:yyyy-MM-dd} to {periodEnd:yyyy-MM-dd}: {rows.Count} vehicle row(s), " +
+                          $"total gross {rows.Sum(r => r.GrossRevenue):F2}.",
+                CreatedAt = DateTime.UtcNow,
+            });
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation(
+                "[PaymentAdmin] PayoutReportGenerated admin={AdminLabel} period={PeriodStart:o}..{PeriodEnd:o} rows={RowCount}",
+                adminLabel, periodStart, periodEnd, rows.Count);
+
+            return rows;
         }
     }
 }

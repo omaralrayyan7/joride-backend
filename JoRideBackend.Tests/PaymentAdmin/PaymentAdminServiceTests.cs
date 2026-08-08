@@ -11,7 +11,8 @@ namespace JoRideBackend.Tests.PaymentAdmin;
 
 public class PaymentAdminServiceTests
 {
-    private static (PaymentsDbContext Db, PaymentAdminService Service, FakePaymentGateway Gateway) CreateSut()
+    private static (PaymentsDbContext Db, PaymentAdminService Service, FakePaymentGateway Gateway) CreateSut(
+        decimal? platformFeePercent = null)
     {
         var options = new DbContextOptionsBuilder<PaymentsDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
@@ -20,7 +21,13 @@ public class PaymentAdminServiceTests
         var gateway = new FakePaymentGateway();
         var ledger = new LedgerService(db, NullLogger<LedgerService>.Instance);
         var firestore = new FirestoreService(new ConfigurationBuilder().Build(), NullLogger<FirestoreService>.Instance);
-        var service = new PaymentAdminService(db, gateway, ledger, firestore, NullLogger<PaymentAdminService>.Instance);
+        var configValues = new Dictionary<string, string?>();
+        if (platformFeePercent is not null)
+        {
+            configValues["Payouts:PlatformFeePercent"] = platformFeePercent.Value.ToString();
+        }
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configValues).Build();
+        var service = new PaymentAdminService(db, gateway, ledger, firestore, configuration, NullLogger<PaymentAdminService>.Instance);
         return (db, service, gateway);
     }
 
