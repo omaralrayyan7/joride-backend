@@ -39,6 +39,18 @@ public class VehiclesController : ControllerBase
         }
     }
 
+    /// <summary>Mirrors a fresh Traccar position onto the vehicle's live lat/lng (Firestore is the live store).</summary>
+    public static void SetPosition(int id, double latitude, double longitude)
+    {
+        var vehicle = vehicles.FirstOrDefault(v => v.Id == id);
+        if (vehicle is not null)
+        {
+            vehicle.Latitude = latitude;
+            vehicle.Longitude = longitude;
+            _ = _firestore?.SaveVehicleAsync(vehicle);
+        }
+    }
+
     public static IReadOnlyList<Vehicle> AllVehicles() => vehicles;
 
     public static void Seed()

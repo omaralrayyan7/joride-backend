@@ -1,11 +1,14 @@
 using JoRideBackend.Models.Payments;
+using JoRideBackend.Models.Telemetry;
 using Microsoft.EntityFrameworkCore;
 
 namespace JoRideBackend.Data
 {
     /// <summary>
-    /// Relational store for money and device-command state. Separate from Firestore,
-    /// which remains the store of record for users/vehicles/trips.
+    /// Relational store for money, device-command state, and telemetry history.
+    /// Separate from Firestore, which remains the store of record for users/vehicles/trips
+    /// (including each vehicle's *live* lat/lng — telemetry history lives here, the current
+    /// position is mirrored onto the Vehicle document by TraccarPollingService).
     /// </summary>
     public class PaymentsDbContext : DbContext
     {
@@ -17,6 +20,7 @@ namespace JoRideBackend.Data
         public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
         public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
         public DbSet<CommandAudit> CommandAudits => Set<CommandAudit>();
+        public DbSet<TelemetrySnapshot> TelemetrySnapshots => Set<TelemetrySnapshot>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -66,6 +70,16 @@ namespace JoRideBackend.Data
                     .WithMany()
                     .HasForeignKey(e => e.DeviceCommandId)
                     .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<TelemetrySnapshot>(entity =>
+            {
+                entity.ToTable("telemetry_snapshots");
+                entity.HasKey(e => e.Id);
+                // Application-level dedup (TraccarService's in-memory cache) already stops
+                // duplicate writes; this unique index is the database-level backstop.
+                entity.HasIndex(e => new { e.DeviceId, e.DeviceTime }).IsUnique();
+                entity.HasIndex(e => e.VehicleId);
             });
         }
     }
