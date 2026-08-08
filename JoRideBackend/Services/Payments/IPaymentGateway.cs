@@ -33,10 +33,15 @@ namespace JoRideBackend.Services.Payments
         Task<PaymentGatewayResult> AuthorizeAsync(PaymentIntent intent, string checkoutId, CancellationToken ct = default);
 
         /// <summary>
-        /// Captures (settles) a previously authorized hold. On success transitions the
-        /// intent to Captured; on failure, to Failed. Requires the intent to be Authorized.
+        /// Captures (settles) a previously authorized hold, in full or in part — HyperPay's
+        /// real CP operation genuinely supports capturing less than the held amount, and even
+        /// multiple partial captures against the same hold (confirmed against OPPWA's docs).
+        /// <paramref name="amount"/> defaults to the full held amount. On success transitions
+        /// the intent to Captured (and, for a partial capture, updates intent.Amount to the
+        /// amount actually captured — see PaymentAdminService.PartialCaptureAsync for why);
+        /// on failure, to Failed. Requires the intent to be Authorized.
         /// </summary>
-        Task<PaymentGatewayResult> CaptureAsync(PaymentIntent intent, CancellationToken ct = default);
+        Task<PaymentGatewayResult> CaptureAsync(PaymentIntent intent, decimal? amount = null, CancellationToken ct = default);
 
         /// <summary>
         /// Releases a previously authorized hold without capturing it. On success
@@ -49,5 +54,17 @@ namespace JoRideBackend.Services.Payments
         /// intent to Refunded. Requires the intent to be Captured.
         /// </summary>
         Task<PaymentGatewayResult> RefundAsync(PaymentIntent intent, decimal amount, CancellationToken ct = default);
+
+        /// <summary>
+        /// Releases the remaining un-captured amount of a hold that has already been
+        /// partially captured — real HyperPay operation (RV against the same resourcePath),
+        /// used only by the partial-capture flow. Deliberately does NOT call
+        /// PaymentIntent.TransitionTo: the intent's own lifecycle already correctly concluded
+        /// at Captured (a PaymentIntent has exactly one terminal outcome — Captured or
+        /// Voided, never both), so this only needs to tell HyperPay to stop holding the rest
+        /// and let the caller record the matching ledger entry. See
+        /// PaymentAdminService.PartialCaptureAsync for the full design rationale.
+        /// </summary>
+        Task<PaymentGatewayResult> ReleaseRemainingHoldAsync(PaymentIntent intent, decimal remainingAmount, CancellationToken ct = default);
     }
 }

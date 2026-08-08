@@ -30,7 +30,7 @@ namespace JoRideBackend.Models
 
     public record UpdateProfileRequest(string? Name, string? Phone, string? ProfileImageUrl);
 
-    public record TopUpRequest(decimal Amount, string? PaymentMethod);
+    public record TopUpRequest(decimal Amount, string? PaymentMethod, string? Reference = null);
 
     public record KeyRequest(int TripId);
 }

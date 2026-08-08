@@ -133,6 +133,7 @@ builder.Services.AddHttpClient("hyperpay");
 builder.Services.AddScoped<JoRideBackend.Services.Payments.IPaymentGateway, JoRideBackend.Services.Payments.HyperPayGateway>();
 builder.Services.AddScoped<JoRideBackend.Services.Payments.LedgerService>();
 builder.Services.AddScoped<JoRideBackend.Services.Payments.HyperPayWebhookService>();
+builder.Services.AddScoped<JoRideBackend.Services.Payments.PaymentAdminService>();
 
 builder.Services.AddHealthChecks()
     .AddCheck<PostgresHealthCheck>("postgres")

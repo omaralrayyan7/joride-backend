@@ -22,6 +22,8 @@ namespace JoRideBackend.Data
         public DbSet<CommandAudit> CommandAudits => Set<CommandAudit>();
         public DbSet<TelemetrySnapshot> TelemetrySnapshots => Set<TelemetrySnapshot>();
         public DbSet<ProcessedPaymentEvent> ProcessedPaymentEvents => Set<ProcessedPaymentEvent>();
+        public DbSet<PendingTopUp> PendingTopUps => Set<PendingTopUp>();
+        public DbSet<PaymentAdminAudit> PaymentAdminAudits => Set<PaymentAdminAudit>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -89,6 +91,29 @@ namespace JoRideBackend.Data
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.ProviderEventId).HasMaxLength(255).IsRequired();
                 entity.HasIndex(e => e.ProviderEventId).IsUnique();
+            });
+
+            modelBuilder.Entity<PendingTopUp>(entity =>
+            {
+                entity.ToTable("pending_topups");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Amount).HasColumnType("numeric(18,2)");
+                entity.Property(e => e.PaymentMethod).HasMaxLength(64).IsRequired();
+                entity.Property(e => e.Reference).HasMaxLength(255);
+                entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
+                entity.HasIndex(e => e.UserId);
+                entity.HasIndex(e => e.Status);
+            });
+
+            modelBuilder.Entity<PaymentAdminAudit>(entity =>
+            {
+                entity.ToTable("payment_admin_audits");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Action).HasMaxLength(64).IsRequired();
+                entity.Property(e => e.AdminLabel).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.Details).HasMaxLength(1000).IsRequired();
+                entity.HasIndex(e => e.PaymentIntentId);
+                entity.HasIndex(e => e.PendingTopUpId);
             });
         }
     }

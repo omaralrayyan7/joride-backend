@@ -99,8 +99,23 @@ namespace JoRideBackend.Services.Payments
             return new PaymentGatewayResult(success, intent.ProviderRef, resultCode, raw);
         }
 
-        public Task<PaymentGatewayResult> CaptureAsync(PaymentIntent intent, CancellationToken ct = default) =>
-            SendBackOfficeOperationAsync(intent, "CP", intent.Amount, PaymentIntentState.Captured, ct);
+        public Task<PaymentGatewayResult> CaptureAsync(PaymentIntent intent, decimal? amount = null, CancellationToken ct = default)
+        {
+            var captureAmount = amount ?? intent.Amount;
+            if (captureAmount <= 0 || captureAmount > intent.Amount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(amount), captureAmount,
+                    $"Capture amount must be > 0 and <= the held amount ({intent.Amount}).");
+            }
+
+            // A partial capture (captureAmount < intent.Amount) settles for less than the
+            // hold — intent.Amount is updated to what was actually captured, mirroring how
+            // PSPs commonly represent this (e.g. Stripe reduces the PaymentIntent's own
+            // amount on a partial capture rather than tracking a separate captured-amount
+            // field). See PaymentAdminService.PartialCaptureAsync for the full flow.
+            return SendBackOfficeOperationAsync(
+                intent, "CP", captureAmount, PaymentIntentState.Captured, ct, adjustIntentAmountTo: captureAmount);
+        }
 
         public Task<PaymentGatewayResult> VoidAsync(PaymentIntent intent, CancellationToken ct = default) =>
             SendBackOfficeOperationAsync(intent, "RV", intent.Amount, PaymentIntentState.Voided, ct);
@@ -108,8 +123,44 @@ namespace JoRideBackend.Services.Payments
         public Task<PaymentGatewayResult> RefundAsync(PaymentIntent intent, decimal amount, CancellationToken ct = default) =>
             SendBackOfficeOperationAsync(intent, "RF", amount, PaymentIntentState.Refunded, ct);
 
+        public async Task<PaymentGatewayResult> ReleaseRemainingHoldAsync(
+            PaymentIntent intent, decimal remainingAmount, CancellationToken ct = default)
+        {
+            EnsureConfigured();
+
+            if (remainingAmount <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(remainingAmount), remainingAmount, "Remaining amount must be positive.");
+            }
+
+            if (string.IsNullOrWhiteSpace(intent.ProviderRef))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot release remaining hold for PaymentIntent {intent.Id}: no ProviderRef recorded.");
+            }
+
+            // Deliberately no EnsureCanTransitionTo/TransitionTo here — see the interface
+            // doc comment. This just tells HyperPay to stop holding the rest.
+            var form = new Dictionary<string, string>
+            {
+                ["entityId"] = _entityId!,
+                ["amount"] = FormatAmount(remainingAmount),
+                ["currency"] = intent.Currency,
+                ["paymentType"] = "RV",
+            };
+
+            var raw = await SendAsync(HttpMethod.Post, $"{_baseUrl}{intent.ProviderRef}", form, ct);
+            var (success, resultCode, _) = ParseResult(raw);
+
+            _logger.LogInformation(
+                "[HyperPay] RV (remainder release) intentId={IntentId} amount={Amount} resultCode={ResultCode} success={Success}",
+                intent.Id, remainingAmount, resultCode, success);
+            return new PaymentGatewayResult(success, intent.ProviderRef, resultCode, raw);
+        }
+
         private async Task<PaymentGatewayResult> SendBackOfficeOperationAsync(
-            PaymentIntent intent, string paymentType, decimal amount, PaymentIntentState onSuccess, CancellationToken ct)
+            PaymentIntent intent, string paymentType, decimal amount, PaymentIntentState onSuccess, CancellationToken ct,
+            decimal? adjustIntentAmountTo = null)
         {
             EnsureConfigured();
             // Validated before any network call: an illegal transition throws immediately
@@ -135,6 +186,10 @@ namespace JoRideBackend.Services.Payments
             var raw = await SendAsync(HttpMethod.Post, $"{_baseUrl}{intent.ProviderRef}", form, ct);
             var (success, resultCode, _) = ParseResult(raw);
 
+            if (success && adjustIntentAmountTo is not null)
+            {
+                intent.Amount = adjustIntentAmountTo.Value;
+            }
             intent.TransitionTo(success ? onSuccess : PaymentIntentState.Failed);
 
             _logger.LogInformation(

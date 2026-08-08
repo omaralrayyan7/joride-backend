@@ -1,4 +1,6 @@
+using JoRideBackend.Data;
 using JoRideBackend.Models;
+using JoRideBackend.Models.Payments;
 using JoRideBackend.Services;
 using JoRideBackend.Services.Payments;
 using Microsoft.AspNetCore.Mvc;
@@ -136,10 +138,19 @@ public class WalletController : ControllerBase
         _ = _firestore?.SaveTransactionAsync(t);   // fire-and-forget
     }
 
+    // Payment rails that aren't confirmed automatically — a Zain Cash/CliQ transfer has to
+    // be manually verified against the provider's own dashboard before the money is real to
+    // us, unlike a HyperPay card checkout (webhook-confirmed) or the simulated "always
+    // approved" methods below. See PendingTopUp's doc comment.
+    private static readonly HashSet<string> ManualReconciliationMethods =
+        new(StringComparer.OrdinalIgnoreCase) { "zain cash", "zaincash", "cliq" };
+
+    private readonly PaymentsDbContext _db;
     private readonly LedgerService _ledger;
 
-    public WalletController(LedgerService ledger)
+    public WalletController(PaymentsDbContext db, LedgerService ledger)
     {
+        _db = db;
         _ledger = ledger;
     }
 
@@ -171,6 +182,34 @@ public class WalletController : ControllerBase
 
         var user = UsersController.GetUser(userId);
         if (user is null) return NotFound("User not found");
+
+        var method = string.IsNullOrWhiteSpace(request.PaymentMethod) ? "unknown" : request.PaymentMethod.Trim();
+
+        if (ManualReconciliationMethods.Contains(method))
+        {
+            // No ledger credit yet, no WalletBalance change yet — see PendingTopUp's doc
+            // comment. An admin has to confirm the transfer actually arrived first
+            // (POST /api/admin/topups/{id}/confirm).
+            var pending = new PendingTopUp
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                Amount = request.Amount,
+                PaymentMethod = method,
+                Reference = request.Reference,
+                Status = PendingTopUpStatus.Pending,
+                CreatedAt = DateTime.UtcNow,
+            };
+            _db.PendingTopUps.Add(pending);
+            await _db.SaveChangesAsync();
+
+            return Ok(new
+            {
+                status = "pending",
+                pendingTopUpId = pending.Id,
+                message = $"Submitted via {method} — awaiting admin confirmation before your balance updates.",
+            });
+        }
 
         await _ledger.RecordTransactionAsync(
             "external:topup_provider", WalletAccount(userId), request.Amount, $"Top-up via {request.PaymentMethod ?? "unknown"}");
