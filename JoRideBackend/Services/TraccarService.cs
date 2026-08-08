@@ -82,7 +82,15 @@ namespace JoRideBackend.Services
             return DeduplicateAndOrder(positions ?? new List<TraccarPosition>());
         }
 
-        /// <summary>Fetches the current (latest) position for a single device.</summary>
+        /// <summary>
+        /// Fetches the current (latest) position for a single device — always the real
+        /// latest position, regardless of whether the polling loop has already seen it.
+        /// Deliberately does NOT go through <see cref="DeduplicateAndOrder"/>: that cache
+        /// exists to stop the poller re-logging an unchanged position, but callers here
+        /// (the Immobilize safety gate, command audit snapshots) need the actual position
+        /// every time — silently returning null for an already-seen-but-still-valid
+        /// position would be wrong for both.
+        /// </summary>
         public async Task<TraccarPosition?> GetPositionAsync(long deviceId, CancellationToken ct = default)
         {
             EnsureRestConfigured();
@@ -90,7 +98,34 @@ namespace JoRideBackend.Services
             var response = await _restHttp.GetAsync($"api/positions?deviceId={deviceId}", ct);
             response.EnsureSuccessStatusCode();
             var positions = await response.Content.ReadFromJsonAsync<List<TraccarPosition>>(JsonOptions, ct);
-            return DeduplicateAndOrder(positions ?? new List<TraccarPosition>()).FirstOrDefault();
+            return positions?.OrderByDescending(p => p.DeviceTime).FirstOrDefault();
+        }
+
+        /// <summary>Finds a registered Traccar device by its uniqueId (we use the vehicle's license plate).</summary>
+        public async Task<TraccarDevice?> FindDeviceByUniqueIdAsync(string uniqueId, CancellationToken ct = default)
+        {
+            var devices = await GetDevicesAsync(ct);
+            return devices.FirstOrDefault(d => string.Equals(d.UniqueId, uniqueId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Sends a command to a device via POST /api/commands/send. Does NOT throw on a
+        /// non-success HTTP response — Traccar rejecting a command it doesn't support
+        /// (expected for our OsmAnd-protocol test device, which has no command channel)
+        /// is a normal, expected outcome, not a transport failure. Network-level failures
+        /// (timeouts, connection errors, 5xx) still throw after the traccar-rest client's
+        /// Polly retry policy (3x exponential backoff) is exhausted.
+        /// </summary>
+        public async Task<TraccarCommandResult> SendCommandAsync(
+            long deviceId, string type, Dictionary<string, object>? attributes = null, CancellationToken ct = default)
+        {
+            EnsureRestConfigured();
+
+            var body = new { deviceId, type, attributes = attributes ?? new Dictionary<string, object>() };
+            var response = await _restHttp.PostAsJsonAsync("api/commands/send", body, JsonOptions, ct);
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+            return new TraccarCommandResult(response.IsSuccessStatusCode, (int)response.StatusCode, responseBody);
         }
 
         /// <summary>Used by /health: true if Traccar's REST API is reachable and authenticated.</summary>

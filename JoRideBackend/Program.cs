@@ -123,6 +123,8 @@ if (string.IsNullOrWhiteSpace(postgresConnectionString))
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(postgresConnectionString));
 
+builder.Services.AddScoped<JoRideBackend.Services.DeviceCommandService>();
+
 builder.Services.AddHealthChecks()
     .AddCheck<PostgresHealthCheck>("postgres")
     .AddCheck<TraccarHealthCheck>("traccar");

@@ -14,7 +14,13 @@ namespace JoRideBackend.Models.Payments
         Sent,
         Confirmed,
         TimedOut,
-        Failed
+        Failed,
+
+        /// <summary>Rejected by the Immobilize safety gate without ever calling Traccar.</summary>
+        SafetyBlocked,
+
+        /// <summary>Rejected because the caller was not authorized to issue device commands.</summary>
+        Unauthorized
     }
 
     public class DeviceCommand

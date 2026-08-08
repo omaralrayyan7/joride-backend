@@ -56,4 +56,8 @@ namespace JoRideBackend.Services
         public TraccarPosition? Position { get; set; }
         public TraccarDevice? Device { get; set; }
     }
+
+    /// <summary>Result of POST /api/commands/send. Not-accepted is an expected outcome
+    /// (e.g. the device's protocol doesn't support commands), not just a transport error.</summary>
+    public record TraccarCommandResult(bool Accepted, int StatusCode, string? ResponseBody);
 }
