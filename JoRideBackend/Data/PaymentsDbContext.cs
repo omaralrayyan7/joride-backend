@@ -21,6 +21,7 @@ namespace JoRideBackend.Data
         public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
         public DbSet<CommandAudit> CommandAudits => Set<CommandAudit>();
         public DbSet<TelemetrySnapshot> TelemetrySnapshots => Set<TelemetrySnapshot>();
+        public DbSet<ProcessedPaymentEvent> ProcessedPaymentEvents => Set<ProcessedPaymentEvent>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -80,6 +81,14 @@ namespace JoRideBackend.Data
                 // duplicate writes; this unique index is the database-level backstop.
                 entity.HasIndex(e => new { e.DeviceId, e.DeviceTime }).IsUnique();
                 entity.HasIndex(e => e.VehicleId);
+            });
+
+            modelBuilder.Entity<ProcessedPaymentEvent>(entity =>
+            {
+                entity.ToTable("processed_payment_events");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.ProviderEventId).HasMaxLength(255).IsRequired();
+                entity.HasIndex(e => e.ProviderEventId).IsUnique();
             });
         }
     }

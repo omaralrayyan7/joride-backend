@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using JoRideBackend.Models.Payments;
 
 namespace JoRideBackend.Services.Payments
@@ -57,6 +56,11 @@ namespace JoRideBackend.Services.Payments
                 ["amount"] = FormatAmount(intent.Amount),
                 ["currency"] = intent.Currency,
                 ["paymentType"] = "PA", // pre-authorization hold; CaptureAsync settles it later
+                // Echoed back on every webhook notification for this checkout (including the
+                // very first "authorize" one, which arrives before we've ever recorded a
+                // ProviderRef) — this is how HyperPayWebhookService correlates a notification
+                // back to this intent without depending on a HyperPay id we don't have yet.
+                ["merchantTransactionId"] = intent.Id.ToString(),
             };
 
             var raw = await SendAsync(HttpMethod.Post, $"{_baseUrl}/v1/checkouts", form, ct);
@@ -160,21 +164,8 @@ namespace JoRideBackend.Services.Payments
                 ? code.GetString() ?? ""
                 : "";
             var resourcePath = root.TryGetProperty("resourcePath", out var rp) ? rp.GetString() : null;
-            return (IsSuccessResultCode(resultCode), resultCode, resourcePath);
+            return (HyperPayResultCodes.IsSuccess(resultCode), resultCode, resourcePath);
         }
-
-        /// <summary>
-        /// HyperPay/OPP result codes are matched by regex per their integration docs
-        /// (successful transaction codes match roughly ^(000\.000\.|000\.100\.1|000\.[36]),
-        /// with 000.200 meaning "pending"). Groundwork-scope: this covers the commonly
-        /// documented success prefixes — revisit against HyperPay's exact code list once
-        /// live credentials exist and real responses can be observed.
-        /// </summary>
-        private static bool IsSuccessResultCode(string code) =>
-            !string.IsNullOrEmpty(code) &&
-            (code.StartsWith("000.000.", StringComparison.Ordinal) ||
-             code.StartsWith("000.100.1", StringComparison.Ordinal) ||
-             Regex.IsMatch(code, @"^000\.[36]"));
 
         private static string FormatAmount(decimal amount) => amount.ToString("F2", CultureInfo.InvariantCulture);
 
