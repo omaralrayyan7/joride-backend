@@ -5,7 +5,7 @@
 [![JWT](https://img.shields.io/badge/Auth-JWT_Bearer-000000?logo=jsonwebtokens)](https://jwt.io/)
 [![Swagger](https://img.shields.io/badge/Docs-Swagger_UI-85EA2D?logo=swagger)](https://swagger.io/)
 
-REST API powering the **JoRide** car-rental / ride-sharing platform for Jordan. Handles user accounts, JWT authentication, vehicle fleet management, trip lifecycle (book → drive → return), in-app wallet payments, OTP verification, digital car keys, push notifications, real-time GPS tracking via Traccar, and an admin dashboard.
+REST API powering the **JoRide** self-drive car-sharing platform for Jordan. Handles user accounts, JWT authentication, vehicle fleet management, trip lifecycle (book → drive → return), in-app wallet payments, OTP verification, digital car keys, push notifications, real-time GPS tracking via Traccar, and an admin dashboard.
 
 > **Related:** [joride-frontend](https://github.com/omaralrayyan7/joride-frontend) — Flutter mobile app
 
