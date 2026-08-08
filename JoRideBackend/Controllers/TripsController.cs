@@ -57,15 +57,21 @@ public class TripsController : ControllerBase
     }
 
     // Booking gate (E2.2): only KYC-Approved, authenticated users may start a trip. This
-    // checks the CALLER's own "kycStatus" claim (see JwtTokenService/KycApprovedRequirement)
-    // — the normal app flow has callers booking for themselves, so this and the existing
-    // debt-gate check below cover the real cases. It does not separately verify
-    // request.UserId against the caller's identity; that binding gap predates this change
-    // and is out of scope here.
+    // checks the CALLER's own "kycStatus" claim (see JwtTokenService/KycApprovedRequirement).
     [Authorize(Policy = "KycApproved")]
     [HttpPost("start")]
     public async Task<ActionResult<Trip>> Start(StartTripRequest request)
     {
+        // Ownership check: a caller may only book for themselves unless they're an admin —
+        // otherwise any authenticated, KYC-approved user could charge an arbitrary other
+        // user's wallet just by putting a different UserId in the body.
+        var callerId = User.FindFirst("sub")?.Value;
+        var isAdmin = User.HasClaim("role", "admin");
+        if (!isAdmin && (callerId is null || !int.TryParse(callerId, out var callerIdInt) || callerIdInt != request.UserId))
+        {
+            return Forbid();
+        }
+
         if (!UsersController.Exists(request.UserId)) return BadRequest("User not found");
 
         // ── Debt gate: block booking while the wallet balance is negative ──────

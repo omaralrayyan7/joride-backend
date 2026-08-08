@@ -144,7 +144,12 @@ public class UsersController : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = user.Id }, BuildProfileResponse(user));
     }
 
-    [Authorize]
+    // Admin-only, matching its siblings Create/Delete/Activate/Deactivate below — this is a
+    // full CRUD action that can set IsAdmin/IsActive/IsLicenseVerified/PasswordHash, unlike
+    // the narrowly-scoped, genuinely self-service UpdateProfile (Name/Phone/ProfileImageUrl
+    // only) above. It was previously just [Authorize], letting any authenticated user edit
+    // any other user's profile — including granting themselves admin.
+    [Authorize(Policy = "AdminOnly")]
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, User update)
     {
