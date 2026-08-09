@@ -1,0 +1,98 @@
+# E8.3 — build+push the API image, then (optionally) deploy it to a VPS over SSH.
+#
+# STATUS: written and structured to be ready to use, but NOT yet exercised against a real
+# server — there is no VPS/host configured for this project yet (see
+# docs/ops/deployment-runbook.md). The build+push job is real and would run today; the
+# deploy job will simply fail cleanly at the SSH step until the secrets listed below are
+# added to the repo (Settings -> Secrets and variables -> Actions), which is the correct,
+# honest state for infrastructure that doesn't exist yet — nothing here is faked to look
+# like it succeeded.
+#
+# Required repo secrets for the deploy job (none of these exist yet):
+#   SSH_HOST           - the VPS's hostname or IP
+#   SSH_USER           - the deploy user on that VPS (should NOT be root — a dedicated,
+#                         least-privilege user that's a member of the `docker` group)
+#   SSH_PRIVATE_KEY    - private half of a keypair whose public half is authorized on
+#                         that user's ~/.ssh/authorized_keys on the VPS; generate a
+#                         dedicated deploy keypair, don't reuse a personal one
+#   SSH_PORT           - optional, defaults to 22
+#   DEPLOY_PATH        - absolute path on the VPS containing docker-compose.prod.yml,
+#                         deploy/, and the real .env (e.g. /opt/joride-backend)
+#
+# GHCR push itself needs no extra secrets: GITHUB_TOKEN (auto-provided by Actions) is
+# sufficient to push to ghcr.io/<owner>/<repo> as long as the repo's Actions settings
+# allow package write access (Settings -> Actions -> General -> Workflow permissions).
+
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.tag.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=master-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.value }}
+            ${{ env.IMAGE }}:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Only attempt the SSH step once the secrets below actually exist — until then this
+    # job is skipped rather than failing loudly on every push, but build-and-push above
+    # still runs and produces a real, pushed image either way.
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            export IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+            echo "$IMAGE_TAG" > .last-deployed-tag.new
+            docker compose -f docker-compose.prod.yml pull api
+            docker compose -f docker-compose.prod.yml up -d --no-deps api
+            # Only recorded as "the deployed tag" (for docs/ops/rollback.md) once the new
+            # container actually comes up healthy — see that doc's rollback trigger.
+            sleep 5
+            docker compose -f docker-compose.prod.yml ps api | grep -q "Up" && mv .last-deployed-tag.new .last-deployed-tag

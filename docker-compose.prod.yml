@@ -1,0 +1,111 @@
+# E8.3 — production compose file: API + Postgres + nginx (TLS termination/reverse proxy).
+#
+# Traccar is deliberately NOT a service in this file, per docs/ops/traccar-runbook.md §7
+# (E8.1): it must run on a private network, never through this public-facing compose stack.
+# Run it separately (its own docker-compose, or a managed instance) on a network this app's
+# `api` service can reach privately, and point TRACCAR_BASE_URL at that private address.
+#
+# The admin dashboard is not a separate service either — it's served by the same
+# JoRideBackend process as the JSON API (Views/Dashboard, see E7), reachable at
+# https://${DOMAIN_NAME}/Dashboard once this stack is up.
+#
+# Usage (see docs/ops/deployment-runbook.md for the full first-time bootstrap, including the
+# TLS chicken-and-egg step this file alone cannot solve):
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: joride-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+    # No published ports: only nginx (on the same `internal` network) talks to this
+    # container. Nothing here is reachable directly from the host or the internet.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Real Firebase service-account key, mounted read-only at the path
+      # FIREBASE__CREDENTIALSPATH in .env points to — never baked into the image (see
+      # Dockerfile's header comment and .gitignore's *firebase-adminsdk*.json rule).
+      # The :-/dev/null default exists ONLY so `docker compose build`/`config` don't hard-fail
+      # on invalid bind-mount syntax when no .env exists yet (e.g. a fresh checkout, or CI
+      # just building the image) — it is not a usable value for `up`, which needs the real
+      # path set in .env.
+      - ${FIREBASE_CREDENTIALS_HOST_PATH:-/dev/null}:/run/secrets/firebase-adminsdk.json:ro
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: joride
+      POSTGRES_USER: joride
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - joride_postgres_prod_data:/var/lib/postgresql/data
+    # No published host port: private by default, matching the "least exposure" posture
+    # from E8.1. Backups/manual access go through `docker compose exec postgres ...` (see
+    # docs/ops/backup-restore.md) rather than opening the port to the host/internet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U joride -d joride"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME}
+    volumes:
+      - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
+    # nginx's official image auto-renders every *.template under /etc/nginx/templates/ with
+    # envsubst into /etc/nginx/conf.d/ on container start (built into the image's own
+    # docker-entrypoint.sh since nginx:1.19) — no custom entrypoint needed for that part.
+    depends_on:
+      - api
+    networks:
+      - internal
+      - public
+
+  # Renews an ALREADY-ISSUED certificate on a loop. Does NOT perform the first-ever
+  # issuance — nginx above needs a cert to exist before it can even start (it reads
+  # ssl_certificate/ssl_certificate_key unconditionally), so the very first certificate has
+  # to be obtained before nginx is up in its final form. That one-time bootstrap is a
+  # documented manual step (docs/ops/deployment-runbook.md) — automating "issue a cert
+  # before the web server that would serve the challenge exists" here would be exactly the
+  # kind of automation this task said not to fake.
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+    entrypoint: >
+      /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h; done"
+
+volumes:
+  joride_postgres_prod_data:
+  certbot_www:
+  certbot_certs:
+
+networks:
+  # api <-> postgres <-> nginx, not reachable from outside the host.
+  internal:
+  # nginx only — the sole entry point from the public internet (ports 80/443 above).
+  public:

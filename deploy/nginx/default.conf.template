@@ -1,0 +1,51 @@
+# E8.3 — nginx reverse proxy + TLS termination in front of the API container.
+#
+# Templated (envsubst runs on container start, via the official nginx image's
+# docker-entrypoint.d mechanism — see docker-compose.prod.yml's `command`) so ${DOMAIN_NAME}
+# can come from the environment rather than being hardcoded here.
+#
+# Security headers (X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy) are
+# already set by the app itself (see Program.cs, E8.1) and are not duplicated here —
+# nginx's job is TLS termination and proxying, not re-implementing that.
+
+server {
+    listen 80;
+    server_name ${DOMAIN_NAME};
+
+    # ACME HTTP-01 challenge path — certbot's webroot plugin writes the challenge file here;
+    # must stay reachable over plain HTTP for cert issuance/renewal to work at all.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # Everything else on :80 redirects to HTTPS.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${DOMAIN_NAME};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN_NAME}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size 10m;
+
+    location / {
+        proxy_pass         http://api:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        # Rate limiting/auth/etc. all happen at the app layer (ASP.NET Core, E8.1) — nginx
+        # here is a plain proxy, not a second policy layer, to avoid the two disagreeing.
+    }
+}
