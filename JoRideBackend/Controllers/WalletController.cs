@@ -91,7 +91,14 @@ public class WalletController : ControllerBase
             CreatedAt   = DateTime.UtcNow,
         };
         _transactions.Add(t);
-        await (_firestore?.SaveTransactionAsync(t) ?? Task.CompletedTask);
+        // E8.2: fire-and-forget, matching the pattern already used for Traccar dispatch/
+        // notifications/audit logs in this codebase (see TripsController.Start's
+        // _traccar.SendBookingEventAsync). This is a log entry of the charge, not the
+        // charge itself — the in-memory _transactions list (checked/returned above) and,
+        // for the internal-wallet branch, User.WalletBalance/SaveUserAsync above are
+        // untouched by this change. Load testing (E8.2 report) found this synchronous
+        // Firestore round-trip was a major contributor to trip-start p95/p99 latency.
+        _ = _firestore?.SaveTransactionAsync(t);
         return true;
     }
     /// <summary>
