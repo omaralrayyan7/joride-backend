@@ -142,6 +142,7 @@ builder.Services.AddScoped<JoRideBackend.Services.Payments.PaymentAdminService>(
 
 // E2.1: refresh token rotation. E2.2: KYC document storage/signing.
 builder.Services.AddScoped<JoRideBackend.Services.Auth.RefreshTokenService>();
+builder.Services.AddScoped<JoRideBackend.Services.Auth.PasswordResetTokenService>();
 builder.Services.AddSingleton<JoRideBackend.Services.Auth.KycDocumentStorage>();
 builder.Services.AddSingleton<JoRideBackend.Services.Auth.KycSigningService>();
 

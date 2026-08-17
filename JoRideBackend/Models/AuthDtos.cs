@@ -29,6 +29,13 @@ namespace JoRideBackend.Models
 
     public record RefreshTokenResponse(string Token, DateTime ExpiresAt, string RefreshToken);
 
+    public record ForgotPasswordRequest(
+        [Required, EmailAddress, StringLength(320)] string Email);
+
+    public record ResetPasswordRequest(
+        [Required] string Token,
+        [Required, StringLength(200, MinimumLength = 1)] string NewPassword);
+
     public record StartTripRequest(
         int UserId,
         int VehicleId,

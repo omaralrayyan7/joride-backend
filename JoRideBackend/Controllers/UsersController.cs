@@ -65,19 +65,25 @@ public class UsersController : ControllerBase
     private readonly ILicenseVerification licenseVerifier;
     private readonly IConfiguration config;
     private readonly RefreshTokenService refreshTokens;
+    private readonly PasswordResetTokenService passwordResetTokens;
+    private readonly ILogger<UsersController> logger;
 
     public UsersController(
         IPasswordHasher<User> hasher,
         JwtTokenService tokens,
         ILicenseVerification licenseVerifier,
         IConfiguration config,
-        RefreshTokenService refreshTokens)
+        RefreshTokenService refreshTokens,
+        PasswordResetTokenService passwordResetTokens,
+        ILogger<UsersController> logger)
     {
         this.hasher = hasher;
         this.tokens = tokens;
         this.licenseVerifier = licenseVerifier;
         this.config = config;
         this.refreshTokens = refreshTokens;
+        this.passwordResetTokens = passwordResetTokens;
+        this.logger = logger;
     }
 
     private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -384,6 +390,66 @@ public class UsersController : ControllerBase
 
         var (token, expiresAt) = tokens.IssueToken(user);
         return new RefreshTokenResponse(token, expiresAt, result.RawToken!);
+    }
+
+    /// <summary>
+    /// KNOWN LIMITATION (demo): no SMTP/SendGrid (or similar) email service is configured in
+    /// this project, so the reset token/link cannot actually be emailed to the user. It is
+    /// logged instead so it can be picked up manually for testing. Before this endpoint is
+    /// used against real users, wire up a real email provider and send the link there instead
+    /// of logging it.
+    /// </summary>
+    [AllowAnonymous]
+    [EnableRateLimiting("auth-login")]
+    [HttpPost("/api/auth/forgot-password")]
+    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest request)
+    {
+        var user = users.FirstOrDefault(u =>
+            string.Equals(u.Email, request.Email, StringComparison.OrdinalIgnoreCase));
+
+        if (user is not null && user.IsActive)
+        {
+            var rawToken = await passwordResetTokens.IssueAsync(user.Id, ClientIp());
+
+            logger.LogWarning(
+                "[ForgotPassword] DEMO MODE — no email service is configured, so this reset " +
+                "token is being logged instead of emailed. User #{UserId} ({Email}) reset token: {Token}",
+                user.Id, user.Email, rawToken);
+        }
+
+        // Same response whether or not the email is registered, so this endpoint can't be
+        // used to enumerate which emails have accounts.
+        return Ok(new { message = "If an account with that email exists, a password reset link has been sent." });
+    }
+
+    [AllowAnonymous]
+    [EnableRateLimiting("auth-login")]
+    [HttpPost("/api/auth/reset-password")]
+    public async Task<IActionResult> ResetPassword(ResetPasswordRequest request)
+    {
+        var validation = await passwordResetTokens.ValidateAsync(request.Token);
+        if (validation.Outcome != PasswordResetOutcome.Valid)
+            return BadRequest("This password reset link is invalid or has expired.");
+
+        var pwdError = PasswordPolicy.Validate(request.NewPassword);
+        if (pwdError is not null) return BadRequest(pwdError);
+
+        var user = users.FirstOrDefault(u => u.Id == validation.Entity!.UserId);
+        if (user is null)
+            return BadRequest("This password reset link is invalid or has expired.");
+
+        user.PasswordHash = hasher.HashPassword(user, request.NewPassword);
+        user.FailedLoginAttempts = 0;
+        user.LockoutEndUtc = null;
+        await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
+
+        await passwordResetTokens.ConsumeAsync(validation.Entity!);
+        await refreshTokens.RevokeAllForUserAsync(user.Id);
+
+        AuditController.Log("PasswordReset", "User", user.Id, $"User #{user.Id} ({user.Email})", "System",
+            $"Password reset via forgot-password token. Request IP: {ClientIp()}.");
+
+        return Ok(new { message = "Password has been reset successfully." });
     }
 
     private static object BuildProfileResponse(User u) => new

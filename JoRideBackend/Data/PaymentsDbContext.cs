@@ -28,6 +28,7 @@ namespace JoRideBackend.Data
         public DbSet<PaymentAdminAudit> PaymentAdminAudits => Set<PaymentAdminAudit>();
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
         public DbSet<KycDocument> KycDocuments => Set<KycDocument>();
+        public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -142,6 +143,17 @@ namespace JoRideBackend.Data
                 entity.Property(e => e.ContentType).HasMaxLength(100).IsRequired();
                 entity.Property(e => e.StoragePath).HasMaxLength(500).IsRequired();
                 entity.HasIndex(e => e.UserId);
+            });
+
+            modelBuilder.Entity<PasswordResetToken>(entity =>
+            {
+                entity.ToTable("password_reset_tokens");
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.TokenHash).HasMaxLength(255).IsRequired();
+                entity.Property(e => e.CreatedByIp).HasMaxLength(64);
+                entity.HasIndex(e => e.TokenHash).IsUnique();
+                entity.HasIndex(e => e.UserId);
+                entity.Ignore(e => e.IsActive); // computed, not a column
             });
         }
     }
