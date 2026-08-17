@@ -79,6 +79,14 @@ namespace JoRideBackend.Services
                 foreach (var p in seeded) await _firestore.SavePricingAsync(p);
                 _logger.LogInformation("  Pricings seeded and saved to Firestore: {N}", seeded.Count);
             }
+
+            var referrals = await _firestore.LoadReferralsAsync();
+            ReferralsController.Initialize(referrals, _firestore);
+            _logger.LogInformation("  Referrals loaded: {N}", referrals.Count);
+
+            var ratings = await _firestore.LoadTripRatingsAsync();
+            RatingsController.Initialize(ratings, _firestore);
+            _logger.LogInformation("  Trip ratings loaded: {N}", ratings.Count);
         }
 
         public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

@@ -22,6 +22,8 @@ namespace JoRideBackend.Models
         public DateTime? PaidAt { get; set; }
         public bool DigitalKeyEnabled { get; set; }
         public string? Status { get; set; }
+        public decimal DiscountPercent { get; set; }
+        public decimal DiscountAmount { get; set; }
 
         /// <summary>
         /// E4.3: set once, the first time OverdueTripMonitorService detects this trip is still

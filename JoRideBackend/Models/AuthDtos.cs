@@ -14,7 +14,8 @@ namespace JoRideBackend.Models
         string? ConfirmPassword = null,
         [StringLength(30)] string? Phone = null,
         [StringLength(50)] string? IdNumber = null,
-        [StringLength(50)] string? DrivingLicenseNumber = null);
+        [StringLength(50)] string? DrivingLicenseNumber = null,
+        [StringLength(20)] string? ReferralCode = null);
 
     public record LoginRequest(
         [Required, StringLength(320)] string Email,
@@ -54,4 +55,9 @@ namespace JoRideBackend.Models
         [StringLength(200)] string? Reference = null);
 
     public record KeyRequest(int TripId);
+
+    public record SubmitRatingRequest(
+        [Range(1, 5)] int Stars,
+        [StringLength(1000)] string? Comment = null,
+        [StringLength(2000)] string? ConditionPhotoUrl = null);
 }

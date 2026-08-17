@@ -154,6 +154,13 @@ public class TripsController : ControllerBase
             _ => now
         };
 
+        // ── Loyalty discount (computed before the lock — read-only) ────────────
+        var (_, discountPct, _) = LoyaltyController.ComputeTier(request.UserId);
+        var discountAmount = discountPct > 0
+            ? Math.Round(request.TotalFare * discountPct / 100m, 2)
+            : 0m;
+        var chargeAmount = request.TotalFare - discountAmount;
+
         // ── E3.1: atomic overlap check + reservation ────────────────────────
         // Everything between acquiring the per-vehicle lock and adding `trip`
         // to the list (or bailing out) is the critical section: it re-checks
@@ -186,7 +193,9 @@ public class TripsController : ControllerBase
                 BaseFare = request.BaseFare,
                 BookingFee = request.BookingFee,
                 Tax = request.Tax,
-                TotalFare = request.TotalFare,
+                TotalFare = chargeAmount,
+                DiscountPercent = discountPct,
+                DiscountAmount = discountAmount,
                 PaymentMethod = request.PaymentMethod,
                 PaymentStatus = "Pending",
                 PaidAt = null,
@@ -207,7 +216,7 @@ public class TripsController : ControllerBase
         // lock. If it fails, roll back the reservation under the same lock.
         var paid = await WalletController.TryChargeAsync(
             request.UserId,
-            request.TotalFare,
+            chargeAmount,
             $"Trip payment for vehicle #{request.VehicleId}",
             request.PaymentMethod);
 
@@ -243,10 +252,13 @@ public class TripsController : ControllerBase
                 userId:   trip.UserId);
         }
 
+        var discountNote = discountAmount > 0
+            ? $" ({discountPct}% loyalty discount applied, saved {discountAmount:F2} JOD)"
+            : string.Empty;
         NotificationsController.Push(
             request.UserId,
             "Booking Confirmed",
-            $"Payment confirmed. Your digital key for vehicle #{request.VehicleId} is active until {scheduledEnd:yyyy-MM-dd HH:mm} UTC.",
+            $"Payment confirmed{discountNote}. Your digital key for vehicle #{request.VehicleId} is active until {scheduledEnd:yyyy-MM-dd HH:mm} UTC.",
             "booking");
 
         var bookingUserName = UsersController.GetUser(trip.UserId)?.Name ?? "?";

@@ -282,6 +282,13 @@ public class UsersController : ControllerBase
 
         await (_firestore?.SaveUserAsync(user) ?? Task.CompletedTask);
 
+        if (!string.IsNullOrWhiteSpace(request.ReferralCode))
+        {
+            var referrerId = ReferralsController.FindReferrer(request.ReferralCode.Trim());
+            if (referrerId.HasValue && referrerId.Value != user.Id)
+                _ = ReferralsController.ApplyReferralAsync(referrerId.Value, user.Id, request.ReferralCode.Trim());
+        }
+
         var (token, expiresAt) = tokens.IssueToken(user);
         var refreshToken = await refreshTokens.IssueAsync(user.Id, ClientIp());
         return new AuthResponse(

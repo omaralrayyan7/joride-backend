@@ -16,6 +16,8 @@ namespace JoRideBackend.Services
         private const string ColVehicles      = "vehicles";
         private const string ColPricings      = "pricings";
         private const string ColAuditLogs     = "audit_logs";
+        private const string ColReferrals     = "referrals";
+        private const string ColTripRatings   = "trip_ratings";
 
         public FirestoreService(IConfiguration config, ILogger<FirestoreService> logger)
         {
@@ -129,6 +131,8 @@ namespace JoRideBackend.Services
                     ["paymentStatus"]     = t.PaymentStatus,
                     ["digitalKeyEnabled"] = t.DigitalKeyEnabled,
                     ["status"]            = t.Status,
+                    ["discountPercent"]   = (double)t.DiscountPercent,
+                    ["discountAmount"]    = (double)t.DiscountAmount,
                 };
                 if (t.ScheduledEndTime.HasValue)
                     dict["scheduledEndTime"] = Timestamp.FromDateTime(t.ScheduledEndTime.Value.ToUniversalTime());
@@ -367,6 +371,8 @@ namespace JoRideBackend.Services
             DigitalKeyEnabled = d.ContainsField("digitalKeyEnabled") && d.GetValue<bool>("digitalKeyEnabled"),
             Status            = Str(d, "status"),
             OverdueFlaggedAt  = d.ContainsField("overdueFlaggedAt") ? d.GetValue<Timestamp>("overdueFlaggedAt").ToDateTime() : null,
+            DiscountPercent   = d.ContainsField("discountPercent") ? (decimal)d.GetValue<double>("discountPercent") : 0m,
+            DiscountAmount    = d.ContainsField("discountAmount") ? (decimal)d.GetValue<double>("discountAmount") : 0m,
         };
 
         private static Notification DocToNotification(DocumentSnapshot d) => new()
@@ -426,6 +432,88 @@ namespace JoRideBackend.Services
             Actor      = Str(d, "actor"),
             ActorRole  = Str(d, "actorRole"),
             Details    = Str(d, "details"),
+        };
+
+        // ── Referrals ─────────────────────────────────────────────────────────────
+        public async Task<List<Referral>> LoadReferralsAsync()
+        {
+            if (!IsConnected) return [];
+            try
+            {
+                var snap = await _db!.Collection(ColReferrals).GetSnapshotAsync();
+                return [.. snap.Documents.Select(DocToReferral)];
+            }
+            catch (Exception ex) { _logger.LogError(ex, "LoadReferralsAsync failed"); return []; }
+        }
+
+        public async Task SaveReferralAsync(Referral r)
+        {
+            if (!IsConnected) return;
+            try
+            {
+                await _db!.Collection(ColReferrals).Document(r.Id.ToString()).SetAsync(new Dictionary<string, object?>
+                {
+                    ["id"]             = (long)r.Id,
+                    ["referrerId"]     = (long)r.ReferrerId,
+                    ["referredUserId"] = (long)r.ReferredUserId,
+                    ["code"]           = r.Code,
+                    ["rewardAmount"]   = (double)r.RewardAmount,
+                    ["createdAt"]      = Timestamp.FromDateTime(r.CreatedAt.ToUniversalTime()),
+                });
+            }
+            catch (Exception ex) { _logger.LogError(ex, "SaveReferralAsync id={Id}", r.Id); }
+        }
+
+        // ── Trip Ratings ──────────────────────────────────────────────────────────
+        public async Task<List<TripRating>> LoadTripRatingsAsync()
+        {
+            if (!IsConnected) return [];
+            try
+            {
+                var snap = await _db!.Collection(ColTripRatings).GetSnapshotAsync();
+                return [.. snap.Documents.Select(DocToTripRating)];
+            }
+            catch (Exception ex) { _logger.LogError(ex, "LoadTripRatingsAsync failed"); return []; }
+        }
+
+        public async Task SaveTripRatingAsync(TripRating r)
+        {
+            if (!IsConnected) return;
+            try
+            {
+                await _db!.Collection(ColTripRatings).Document(r.TripId.ToString()).SetAsync(new Dictionary<string, object?>
+                {
+                    ["tripId"]            = (long)r.TripId,
+                    ["userId"]            = (long)r.UserId,
+                    ["vehicleId"]         = (long)r.VehicleId,
+                    ["stars"]             = (long)r.Stars,
+                    ["comment"]           = r.Comment,
+                    ["conditionPhotoUrl"] = r.ConditionPhotoUrl,
+                    ["submittedAt"]       = Timestamp.FromDateTime(r.SubmittedAt.ToUniversalTime()),
+                });
+            }
+            catch (Exception ex) { _logger.LogError(ex, "SaveTripRatingAsync tripId={Id}", r.TripId); }
+        }
+
+        private static Referral DocToReferral(DocumentSnapshot d) => new()
+        {
+            Id             = (int)d.GetValue<long>("id"),
+            ReferrerId     = (int)d.GetValue<long>("referrerId"),
+            ReferredUserId = (int)d.GetValue<long>("referredUserId"),
+            Code           = Str(d, "code") ?? string.Empty,
+            RewardAmount   = d.ContainsField("rewardAmount") ? (decimal)d.GetValue<double>("rewardAmount") : 0m,
+            CreatedAt      = d.GetValue<Timestamp>("createdAt").ToDateTime(),
+        };
+
+        private static TripRating DocToTripRating(DocumentSnapshot d) => new()
+        {
+            TripId            = (int)d.GetValue<long>("tripId"),
+            UserId            = (int)d.GetValue<long>("userId"),
+            VehicleId         = (int)d.GetValue<long>("vehicleId"),
+            Stars             = (int)d.GetValue<long>("stars"),
+            Comment           = Str(d, "comment"),
+            ConditionPhotoUrl = Str(d, "conditionPhotoUrl"),
+            SubmittedAt       = d.GetValue<Timestamp>("submittedAt").ToDateTime(),
         };
 
         private static string? Str(DocumentSnapshot d, string field)
