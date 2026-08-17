@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using System.Threading.RateLimiting;
@@ -263,9 +265,45 @@ if (app.Environment.IsDevelopment())
 }
 else
 {
-    app.UseExceptionHandler("/Home/Error");
     app.UseHsts();
     app.UseHttpsRedirection();
+}
+
+// API callers (the mobile app) get ProblemDetails JSON on an unhandled exception, in every
+// environment — an HTML MVC error view is unparseable by the mobile client. This must be
+// registered before the MVC-view exception handler below so /api/* requests are branched
+// off before that handler's Home/Error redirect ever applies.
+app.UseWhen(context => context.Request.Path.StartsWithSegments("/api"), apiApp =>
+{
+    apiApp.UseExceptionHandler(errorApp =>
+    {
+        errorApp.Run(async context =>
+        {
+            context.Response.ContentType = "application/problem+json";
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+
+            var feature = context.Features.Get<IExceptionHandlerFeature>();
+            var problem = new ProblemDetails
+            {
+                Status = StatusCodes.Status500InternalServerError,
+                Title = "An unexpected error occurred.",
+                Type = "https://tools.ietf.org/html/rfc7231#section-6.6.1",
+                Instance = context.Request.Path
+            };
+            if (app.Environment.IsDevelopment() && feature?.Error is not null)
+            {
+                problem.Detail = feature.Error.ToString();
+            }
+
+            await context.Response.WriteAsJsonAsync(problem);
+        });
+    });
+});
+
+if (!app.Environment.IsDevelopment())
+{
+    // Non-API (MVC/Razor admin dashboard) requests still get the HTML error view.
+    app.UseExceptionHandler("/Home/Error");
 }
 
 // E8.1: standard security response headers, applied to every response (API JSON and the

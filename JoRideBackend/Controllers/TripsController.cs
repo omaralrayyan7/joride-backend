@@ -463,11 +463,19 @@ public class TripsController : ControllerBase
         return trip;
     }
 
+    [Authorize]
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, Trip update)
     {
         var trip = trips.FirstOrDefault(t => t.Id == id);
         if (trip is null) return NotFound();
+
+        var callerId = User.FindFirst("sub")?.Value;
+        var isAdmin = User.HasClaim("role", "admin");
+        if (!isAdmin && (callerId is null || !int.TryParse(callerId, out var callerIdInt) || callerIdInt != trip.UserId))
+        {
+            return Forbid();
+        }
 
         trip.UserId = update.UserId;
         trip.VehicleId = update.VehicleId;
@@ -490,6 +498,7 @@ public class TripsController : ControllerBase
         return NoContent();
     }
 
+    [Authorize(Policy = "AdminOnly")]
     [HttpDelete("{id:int}")]
     public IActionResult Delete(int id)
     {
