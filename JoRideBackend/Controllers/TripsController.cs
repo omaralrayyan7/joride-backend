@@ -64,14 +64,24 @@ public class TripsController : ControllerBase
         return result.OrderByDescending(t => t.StartTime).ToList();
     }
 
+    // Caller may only look up their own active trip unless they're an admin — otherwise any
+    // authenticated user could probe whether an arbitrary other user has a trip in progress.
+    [Authorize]
     [HttpGet("active")]
     public ActionResult<Trip> GetActive([FromQuery] int userId)
     {
+        var callerId = User.FindFirst("sub")?.Value;
+        var isAdmin = User.HasClaim("role", "admin");
+        if (!isAdmin && (callerId is null || !int.TryParse(callerId, out var callerIdInt) || callerIdInt != userId))
+        {
+            return Forbid();
+        }
+
         var trip = trips
-            .Where(t => t.UserId == userId && t.Status == "InProgress" && t.PaymentStatus == "Paid")
+            .Where(t => t.UserId == userId && t.Status != "Completed" && t.Status != "Cancelled")
             .OrderByDescending(t => t.StartTime)
             .FirstOrDefault();
-        return trip is null ? NotFound("No active paid trip found.") : trip;
+        return trip is null ? NotFound() : trip;
     }
 
     [HttpGet("{id:int}")]
