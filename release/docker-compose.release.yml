@@ -1,0 +1,84 @@
+# One-command grader/demo bundle: API + Postgres + Traccar, no host .NET/Postgres/Docker
+# config needed beyond Docker itself. Not for development (see ../docker-compose.dev.yml)
+# and not for a real production deploy (see ../docker-compose.prod.yml, which adds nginx+TLS
+# and expects real secrets via a real .env) — this file bakes in safe, non-secret dev-only
+# defaults so `docker compose up` works with zero setup.
+#
+# Usage (from this `release/` folder):
+#   docker compose -f docker-compose.release.yml up --build
+# Then open http://localhost:9000/health once containers report healthy (~30s).
+# See README.md in this folder for what's included and its known limitations.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "9000:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      AUTO_MIGRATE_ON_STARTUP: "true"
+
+      # Baked-in dev-only defaults — NOT real secrets, safe to commit, matches the pattern
+      # already used by ../docker-compose.dev.yml for Postgres. Do not reuse these values
+      # for any real deployment (see ../docker-compose.prod.yml + ../.env.example instead).
+      JWT__KEY: "joride-release-demo-jwt-signing-key-not-a-real-secret-2026"
+      KYC_DOCUMENT_SIGNING_SECRET: "joride-release-demo-kyc-signing-secret-2026"
+      TRACCAR_WEBHOOK_SECRET: "joride-release-demo-traccar-webhook-secret-2026"
+      POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=joride;Username=joride;Password=joride_release_password"
+
+      # Traccar is bundled and reachable at this internal address, but no TRACCAR_TOKEN is
+      # baked in (a real one can only be generated from a running Traccar instance — see
+      # README.md "Wiring up live GPS" if you want to connect it). Without a token, the
+      # backend runs with GPS/device-command features as documented no-ops rather than
+      # failing to start — see JoRideBackend/Program.cs's TRACCAR_BASE_URL/TRACCAR_TOKEN
+      # comment and JoRideBackend/Services/TraccarService.cs.
+      TRACCAR_BASE_URL: "http://traccar:8082"
+
+      # Explicitly cleared (appsettings.json bakes in the real project ID): an empty
+      # Firebase:ProjectId makes FirestoreService fall back to in-memory-only storage (see
+      # JoRideBackend/Services/FirestoreService.cs) with a clean log line, instead of
+      # requiring a real GCP service-account key the grader doesn't have and logging a
+      # FileNotFoundException stack trace when it can't find one. Users/vehicles/trips work
+      # identically for a demo session; nothing persists across a restart.
+      Firebase__ProjectId: ""
+
+      # Twilio/SMTP intentionally left unset: SmsService/EmailService already fall back to
+      # logging OTPs/emails to the container's stdout instead of sending them for real (see
+      # `docker compose logs api`) — no dev-mode toggle needed here.
+      # HyperPay intentionally left unset: HyperPayGateway returns a clear "not configured"
+      # error rather than attempting a real charge; trips already pay via the in-app wallet
+      # simulation path regardless (see docs from the launch-readiness audit).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      traccar:
+        condition: service_started
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: joride
+      POSTGRES_USER: joride
+      POSTGRES_PASSWORD: joride_release_password
+    volumes:
+      - joride_postgres_release_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U joride -d joride"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Bundled so the GPS/device-command backend is visibly present and its web UI is reachable
+  # for the grader (http://localhost:8083, default login admin/admin) — see README.md. Not
+  # pre-wired with a live API token; see the TRACCAR_BASE_URL comment above.
+  traccar:
+    image: traccar/traccar:5.12-alpine
+    ports:
+      - "8083:8082"   # Web UI / REST API
+      - "5055:5055"   # OsmAnd protocol (usable with a phone GPS-forwarder app for a live demo)
+
+volumes:
+  joride_postgres_release_data:
